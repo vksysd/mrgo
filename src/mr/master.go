@@ -45,7 +45,7 @@ type Master struct {
 // func Reduce(key string, values []string) string
 func (m *Master) RequestTask(req MrRequest, reply *MrReply) error {
 	// dont use req
-	fmt.Println("RequestTask getting called")
+	//fmt.Println("RequestTask getting called")
 	rep := MrReply{}
 	// 1. is all files are processed > ? map process is over ?
 	// hold mutex lock
@@ -57,7 +57,7 @@ func (m *Master) RequestTask(req MrRequest, reply *MrReply) error {
 		rep.WorkType = "Mapper"
 		m.nMapper--
 		m.filesState[rep.FileName] = 1
-		fmt.Println(rep)
+		//ln(rep)
 
 	} else {
 
@@ -122,7 +122,7 @@ func (m *Master) RequestTask(req MrRequest, reply *MrReply) error {
 			rep.WorkerNum = m.nReducer + 1
 			rep.WorkType = "Reducer"
 			m.nReducer++
-			fmt.Println("File Sent to Reducer = ", rep.FileName)
+			//ln("File Sent to Reducer = ", rep.FileName)
 		} else {
 			// all reduce tasks are finished
 			// reply the worker to quit now, maybe close socket connection
@@ -175,7 +175,7 @@ func (m *Master) ReducerDone(req *ReducerRequest, reply *MrEmpty) error {
 
 func (m *Master) Example(args *ExampleArgs, reply *ExampleReply) error {
 	reply.Y = args.X + 1
-	fmt.Println("Example RPC is called")
+	//fmt.Println("Example RPC is called")
 	return nil
 }
 

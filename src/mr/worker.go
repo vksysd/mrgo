@@ -58,7 +58,7 @@ func Worker(mapf func(string, string) []KeyValue,
 			os.Exit(1)
 		}
 		if worktype == "Mapper" {
-			fmt.Println("Got a map task from master with filename = ", filename)
+			//fmt.Println("Got a map task from master with filename = ", filename)
 			file, err := os.Open(filename)
 			if err != nil {
 				log.Fatalf("cannot open %v", filename)
@@ -112,14 +112,14 @@ func Worker(mapf func(string, string) []KeyValue,
 			for k, _ := range FileSet {
 				intermediatefileList = append(intermediatefileList, k)
 			}
-			fmt.Println("Number of files sent to master = ", len(intermediatefileList)) // output should be <= 10
-			mRequest := MapperRequest{intermediatefileList, 2, filename}                // 2 means mapper task is done
+			//fmt.Println("Number of files sent to master = ", len(intermediatefileList)) // output should be <= 10
+			mRequest := MapperRequest{intermediatefileList, 2, filename} // 2 means mapper task is done
 			CallMapperDone(mRequest)
-			fmt.Println("Mapper Task Done! :", workernum)
+			//fmt.Println("Mapper Task Done! :", workernum)
 
 		} else {
 			// call reducef
-			fmt.Println("Got a reduce task from master with filename = ", filename)
+			//fmt.Println("Got a reduce task from master with filename = ", filename)
 			intermediatefile = filename
 			intermediatekva := []KeyValue{}
 			x, err := os.Open(intermediatefile)
@@ -192,7 +192,7 @@ func CallExample() {
 	call("Master.Example", &args, &reply)
 
 	// reply.Y should be 100.
-	fmt.Printf("reply.Y %v\n", reply.Y)
+	//fmt.Printf("reply.Y %v\n", reply.Y)
 }
 
 func CallRequestTask() (string, int, string) {
