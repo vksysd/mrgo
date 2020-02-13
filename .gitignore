@@ -1,0 +1,8 @@
+bin/
+pkg/
+api.key
+*.so
+src/main/*.so
+test.go
+mr-out*
+*-handin.tar.gz

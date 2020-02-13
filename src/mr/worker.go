@@ -55,7 +55,6 @@ func Worker(mapf func(string, string) []KeyValue,
 	filename, workernum, worktype = CallRequestTask()
 	if worktype == "Mapper" {
 		fmt.Println("Got a map task from master with filename = ", filename)
-		// call mapf
 		file, err := os.Open(filename)
 		if err != nil {
 			log.Fatalf("cannot open %v", filename)
@@ -65,24 +64,39 @@ func Worker(mapf func(string, string) []KeyValue,
 			log.Fatalf("cannot read %v", filename)
 		}
 		file.Close()
+
 		kva := mapf(filename, string(content))
-		intermediatefileList := make([]string, 0)
-		// map keys to intermediatefile and insert them in file
+
+		// The following logic creates files of type mapper-X-Y
+		// X = workernum
+		// Y = Final Intermediate file
 		fileMap := make(map[string]*os.File)
 		for i := 0; i < 10; i++ {
-			if _, err := os.Stat("mapper" + strconv.Itoa(i)); err == nil {
-				fileMap["mapper"+strconv.Itoa(i)], _ = os.OpenFile("mapper"+strconv.Itoa(i), os.O_APPEND|os.O_WRONLY, os.ModeAppend)
+			fName := "mapper" + "-" + strconv.Itoa(workernum) + "-" + strconv.Itoa(i)
+			if _, err := os.Stat(fName); err == nil {
+				fileMap[fName], err = os.OpenFile(fName, os.O_APPEND|os.O_WRONLY, os.ModeAppend)
+				if err != nil {
+					fmt.Println(err)
+				}
 			} else if os.IsNotExist(err) {
-				fileMap["mapper"+strconv.Itoa(i)], _ = os.Create("mapper" + strconv.Itoa(i))
+				fileMap[fName], err = os.Create(fName)
+				if err != nil {
+					fmt.Println(err)
+				}
 			} else {
 				fmt.Println("Something else is going on !")
 			}
 		}
+
+		var FileSet = make(map[string]bool)
 		for _, kv := range kva {
 			filenumber := ihash(kv.Key) % 10
-			intermediatefile = "mapper" + strconv.Itoa(filenumber)
-			// fmt.Println(intermediatefile)
-			intermediatefileList = append(intermediatefileList, intermediatefile)
+			intermediatefile = "mapper" + "-" + strconv.Itoa(workernum) + "-" + strconv.Itoa(filenumber)
+			if _, ok := FileSet[intermediatefile]; !ok {
+				// intermediatefile does not exists in the SET of Intermediate Files
+				// Therefore Insert this intermediate file in the SET
+				FileSet[intermediatefile] = true
+			}
 			enc := json.NewEncoder(fileMap[intermediatefile])
 			err = enc.Encode(&kv)
 		}
@@ -90,7 +104,12 @@ func Worker(mapf func(string, string) []KeyValue,
 			fp.Close()
 		}
 		//notify master that Mapper has finished its task
-		mRequest := MapperRequest{intermediatefileList, 2, filename}
+		intermediatefileList := make([]string, 0)
+		for k, _ := range FileSet {
+			intermediatefileList = append(intermediatefileList, k)
+		}
+		fmt.Println("Number of files sent to master = ", len(intermediatefileList)) // output should be <= 10
+		mRequest := MapperRequest{intermediatefileList, 2, filename}                // 2 means mapper task is done
 		CallMapperDone(mRequest)
 		fmt.Println("Mapper Task Done! :", workernum)
 
@@ -99,11 +118,14 @@ func Worker(mapf func(string, string) []KeyValue,
 		fmt.Println("Got a reduce task from master with filename = ", filename)
 		intermediatefile = filename
 		intermediatekva := []KeyValue{}
-		x, _ := os.Open(intermediatefile)
+		x, err := os.Open(intermediatefile)
+		if err != nil {
+			fmt.Println(err)
+		}
 		dec := json.NewDecoder(x)
 		for {
 			var kv KeyValue
-			if err := dec.Decode(&kv); err != nil {
+			if err = dec.Decode(&kv); err != nil {
 				break
 			}
 			intermediatekva = append(intermediatekva, kv)
