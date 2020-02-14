@@ -2,11 +2,14 @@ package mr
 
 import (
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"net/http"
 	"net/rpc"
 	"os"
+	"strconv"
+	"strings"
 	"sync"
 )
 
@@ -18,10 +21,12 @@ type Master struct {
 	nReducer               int
 	intermediateFiles      []string
 	reducerFiles           []string
+	finalIntFiles          []string
 	maxReducers            int
 	completedReducersCount int
 	mux                    sync.Mutex
 	c                      *sync.Cond
+	assembleFileDone       bool
 }
 
 // Your code here -- RPC handlers for the worker to call.
@@ -55,55 +60,78 @@ func (m *Master) RequestTask(req MrRequest, reply *MrReply) error {
 		fmt.Println(rep)
 
 	} else {
-		// all map tasks are done or not
-		// check if all files are completed by Map workers
-		allMapperDoneFlag := 1
-		// lock it first
 
-		for _, filename := range m.filesState {
-			if filename != 2 {
-				allMapperDoneFlag = 0
-				break
-			}
-		}
-		fmt.Println(m.filesState)
-		if allMapperDoneFlag == 0 {
-			// some tasks are still left;
-			// make this RPC request on hold, using condition variables
-			checkState := func() bool {
-				for _, filename := range m.filesState {
-					if filename != 2 {
-						return false
-					}
+		checkState := func() bool {
+			for _, state := range m.filesState {
+				if state != 2 {
+					return false
 				}
-				return true
 			}
-			for checkState() == false {
-				m.c.Wait()
-			}
-
-		} else {
-			//all mappers are fninished now we can start reducing
-			//logic to start sending reducers work
-			if m.nReducer != m.maxReducers {
-				// some reducers task is still left, so assign it to a new worker
-				rep.FileName = m.intermediateFiles[m.nReducer]
-				rep.WorkerNum = m.nReducer + 1
-				rep.WorkType = "Reducer"
-				m.nReducer++
-			} else {
-				// all reduce tasks are finished
-				// reply the worker to quit now, maybe close socket connection
-				fmt.Printf("nothing here")
-			}
+			return true
 		}
+		for checkState() == false {
+			m.c.Wait()
+		}
+
+		if m.assembleFileDone == false {
+			fileMap := make(map[string]*os.File)
+
+			for i := 0; i < m.maxReducers; i++ {
+				fName := "mapper" + "-" + strconv.Itoa(i)
+				if _, err := os.Stat(fName); err == nil {
+					fileMap[fName], err = os.OpenFile(fName, os.O_APPEND|os.O_WRONLY, os.ModeAppend)
+					if err != nil {
+						log.Fatalln(err)
+					}
+					//defer fileMap[fName].Close()
+				} else if os.IsNotExist(err) {
+					fileMap[fName], err = os.Create(fName)
+					if err != nil {
+						log.Fatalln(err)
+					}
+					//defer fileMap[fName].Close()
+				} else {
+					fmt.Println("Something else is going on !")
+				}
+			}
+			for _, fileName := range m.intermediateFiles {
+				parts := strings.SplitN(fileName, "-", -1) // parts = [mapper,X,Y]
+				//fmt.Println(parts[2])
+				fp, err := os.Open(fileName) // open the file mapper-X-Y in read mode
+				if err != nil {
+					log.Fatalln(err)
+				}
+				_, err = io.Copy(fileMap["mapper"+"-"+parts[2]], fp)
+				if err != nil {
+					log.Fatalln(err)
+				}
+				fp.Close()
+			}
+			for fl, _ := range fileMap {
+				m.finalIntFiles = append(m.finalIntFiles, fl)
+			}
+			for _, v := range fileMap {
+				v.Close()
+			}
+			m.assembleFileDone = true
+		}
+
+		if m.nReducer != m.maxReducers {
+			// some reducers task is still left, so assign it to a new worker
+			rep.FileName = m.finalIntFiles[m.nReducer]
+			rep.WorkerNum = m.nReducer + 1
+			rep.WorkType = "Reducer"
+			m.nReducer++
+			fmt.Println("File Sent to Reducer = ", rep.FileName)
+		} else {
+			// all reduce tasks are finished
+			// reply the worker to quit now, maybe close socket connection
+			fmt.Printf("nothing here")
+		}
+
 	}
-	// release mutex
-	// m.mux.Unlock()
 	m.c.L.Unlock()
-	// 2. if not send map task to worker
 	*reply = rep
-	// 3. otherwise send reduce task to worker
 	return nil
 }
 
@@ -141,6 +169,7 @@ func (m *Master) ReducerDone(req *ReducerRequest, reply *MrEmpty) error {
 	m.reducerFiles = append(m.reducerFiles, req.FileName)
 	m.completedReducersCount += req.ReducerState
 	m.c.L.Unlock()
+	m.c.Broadcast() // special use
 	return nil
 }
 
@@ -191,6 +220,7 @@ func MakeMaster(files []string, nReduce int) *Master {
 	m.filesState = make(map[string]int)
 	m.nMapper = 0
 	m.intermediateFiles = make([]string, 0)
+	m.finalIntFiles = make([]string, 0)
 	m.reducerFiles = make([]string, 0)
 
 	m.nReducer = 0
@@ -204,6 +234,7 @@ func MakeMaster(files []string, nReduce int) *Master {
 	// Your code here.
 
 	m.c = sync.NewCond(&m.mux)
+	m.assembleFileDone = false
 
 	m.server()
 	return &m
