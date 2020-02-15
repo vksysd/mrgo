@@ -26,6 +26,4 @@ func main() {
 	for m.Done_() == false {
 		time.Sleep(time.Second)
 	}
-
-	// time.Sleep(time.Hour)
 }

@@ -6,7 +6,7 @@ src/main/*.so
 test.go
 mr-out*
 *-handin.tar.gz
-
+src/main/mr-tmp/*
 
 src/main/mrmaster
 src/main/mrsequential

@@ -27,6 +27,7 @@ type Master struct {
 	mux                    sync.Mutex
 	c                      *sync.Cond
 	assembleFileDone       bool
+	jobDone                bool
 }
 
 // Your code here -- RPC handlers for the worker to call.
@@ -45,7 +46,7 @@ type Master struct {
 // func Reduce(key string, values []string) string
 func (m *Master) RequestTask(req MrRequest, reply *MrReply) error {
 	// dont use req
-	fmt.Println("RequestTask getting called")
+	// fmt.Println("RequestTask getting called")
 	rep := MrReply{}
 
 	m.c.L.Lock()
@@ -114,7 +115,7 @@ func (m *Master) RequestTask(req MrRequest, reply *MrReply) error {
 			rep.WorkerNum = m.nReducer + 1
 			rep.WorkType = "Reducer"
 			m.nReducer++
-			fmt.Println("File Sent to Reducer = ", rep.FileName)
+			// fmt.Println("File Sent to Reducer = ", rep.FileName)
 		} else {
 			fmt.Println("All Tasks are assigned")
 			rep.FileName = "None"
@@ -193,6 +194,19 @@ func (m *Master) Done_() bool {
 	m.c.L.Lock()
 	if m.completedReducersCount == m.maxReducers {
 		ret = true
+		for _, f := range m.intermediateFiles {
+			var err = os.Remove(f)
+			if err != nil {
+				log.Fatalln(err)
+				
+			}
+		}
+		for _, f := range m.finalIntFiles {
+			var err = os.Remove(f)
+			if err != nil {
+				log.Fatalln(err)
+			}
+		}
 	}
 	m.c.L.Unlock()
 	return ret
@@ -222,6 +236,7 @@ func MakeMaster(files []string, nReduce int) *Master {
 
 	m.c = sync.NewCond(&m.mux)
 	m.assembleFileDone = false
+	m.jobDone = false
 
 	m.server()
 	return &m

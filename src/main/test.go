@@ -1,43 +1,36 @@
 package main
 
 import (
-	"encoding/json"
 	"fmt"
-	"os"
+	"math/rand"
+	"sync"
+	"time"
 )
 
-type KeyValue struct {
-	Key   string
-	Value string
+const MAX_TIME = 3
+
+var wg sync.WaitGroup
+
+type notification struct {
+	c chan chan string
+}
+
+func Schedular() {
+	
+}
+
+func Request() {
+	time.Sleep(time.Second * time.Duration(rand.Intn(MAX_TIME)))
+	defer wg.Done()
+	// inform the master go routine
+	fmt.Println("Hello!")
 }
 
 func main() {
-	// fp, _ := os.Create("FileA")
-	kva := []KeyValue{}
-	// kva = append(kva, KeyValue{Key: "A", Value: "Apple"})
-	// kva = append(kva, KeyValue{Key: "B", Value: "Ball"})
-	// kva = append(kva, KeyValue{Key: "C", Value: "Cat"})
-	// kva = append(kva, KeyValue{Key: "D", Value: "Dog"})
-	// enc := json.NewEncoder(fp)
-	// for _, kv := range kva {
-	// 	enc.Encode(&kv)
-	// }
-	// fp.Close()
+	wg.Add(1)
+	go Request()
 
-	fp2, err := os.OpenFile("FileA", os.O_APPEND|os.O_WRONLY, os.ModeAppend)
-	if err != nil {
-		fmt.Println("Some Error!")
-	}
-	kva = append(kva, KeyValue{Key: "E", Value: "Elephant"})
-	kva = append(kva, KeyValue{Key: "F", Value: "Fox"})
-	enc1 := json.NewEncoder(fp2)
-	for _, kv := range kva {
-		err = enc1.Encode(&kv)
-		if err != nil {
-			fmt.Println("Error!")
-			fmt.Println(err)
-		}
-	}
-
-	fp2.Close()
+	wg.Add(1)
+	go Request()
+	wg.Wait()
 }
