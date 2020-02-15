@@ -47,18 +47,14 @@ func (m *Master) RequestTask(req MrRequest, reply *MrReply) error {
 	// dont use req
 	fmt.Println("RequestTask getting called")
 	rep := MrReply{}
-	// 1. is all files are processed > ? map process is over ?
-	// hold mutex lock
+
 	m.c.L.Lock()
 	if m.nMapper != 0 {
-		//some filenames are not assigned to any Map Worker
 		rep.FileName = m.files[m.nMapper-1]
 		rep.WorkerNum = m.nMapper
 		rep.WorkType = "Mapper"
 		m.nMapper--
 		m.filesState[rep.FileName] = 1
-		fmt.Println(rep)
-
 	} else {
 
 		checkState := func() bool {
@@ -83,21 +79,18 @@ func (m *Master) RequestTask(req MrRequest, reply *MrReply) error {
 					if err != nil {
 						log.Fatalln(err)
 					}
-					//defer fileMap[fName].Close()
 				} else if os.IsNotExist(err) {
 					fileMap[fName], err = os.Create(fName)
 					if err != nil {
 						log.Fatalln(err)
 					}
-					//defer fileMap[fName].Close()
 				} else {
 					fmt.Println("Something else is going on !")
 				}
 			}
 			for _, fileName := range m.intermediateFiles {
 				parts := strings.SplitN(fileName, "-", -1) // parts = [mapper,X,Y]
-				//fmt.Println(parts[2])
-				fp, err := os.Open(fileName) // open the file mapper-X-Y in read mode
+				fp, err := os.Open(fileName)               // open the file mapper-X-Y in read mode
 				if err != nil {
 					log.Fatalln(err)
 				}
@@ -117,16 +110,16 @@ func (m *Master) RequestTask(req MrRequest, reply *MrReply) error {
 		}
 
 		if m.nReducer != m.maxReducers {
-			// some reducers task is still left, so assign it to a new worker
 			rep.FileName = m.finalIntFiles[m.nReducer]
 			rep.WorkerNum = m.nReducer + 1
 			rep.WorkType = "Reducer"
 			m.nReducer++
 			fmt.Println("File Sent to Reducer = ", rep.FileName)
 		} else {
-			// all reduce tasks are finished
-			// reply the worker to quit now, maybe close socket connection
-			fmt.Printf("nothing here")
+			fmt.Println("All Tasks are assigned")
+			rep.FileName = "None"
+			rep.WorkerNum = -1
+			rep.WorkType = "None"
 		}
 
 	}
@@ -138,23 +131,19 @@ func (m *Master) RequestTask(req MrRequest, reply *MrReply) error {
 func (m *Master) MapperDone(req *MapperRequest, reply *MrEmpty) error {
 
 	for _, filename := range req.FileName {
-		// check in intermediateFiles, if the filename do not exist append it
 		var fileExists bool
 		for _, ele := range m.intermediateFiles {
 			if ele == filename {
-				//file is already added
 				fileExists = true
 				break
 			}
 		}
-
 		if !fileExists {
 			m.c.L.Lock()
 			m.intermediateFiles = append(m.intermediateFiles, filename)
 			m.c.L.Unlock()
 		}
 	}
-	// update the state of original file in the filesState map
 	m.c.L.Lock()
 	m.filesState[req.OriginalFileAllocated] = req.MapperState
 	m.c.L.Unlock()
@@ -162,8 +151,6 @@ func (m *Master) MapperDone(req *MapperRequest, reply *MrEmpty) error {
 	return nil
 }
 
-// this rpc call is the status being sent from Reducer to Master once the reducer
-// finishes its job
 func (m *Master) ReducerDone(req *ReducerRequest, reply *MrEmpty) error {
 	m.c.L.Lock()
 	m.reducerFiles = append(m.reducerFiles, req.FileName)
