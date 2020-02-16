@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 )
 
 type Master struct {
@@ -28,6 +29,8 @@ type Master struct {
 	c                      *sync.Cond
 	assembleFileDone       bool
 	jobDone                bool
+	workerNum              int64
+	ReducerFileState       map[string]int
 }
 
 // Your code here -- RPC handlers for the worker to call.
@@ -47,83 +50,134 @@ type Master struct {
 func (m *Master) RequestTask(req MrRequest, reply *MrReply) error {
 	// dont use req
 	// fmt.Println("RequestTask getting called")
-	rep := MrReply{}
-
+	// check what tyoe of task is ready ?
 	m.c.L.Lock()
-	if m.nMapper != 0 {
-		rep.FileName = m.files[m.nMapper-1]
-		rep.WorkerNum = m.nMapper
-		rep.WorkType = "Mapper"
-		m.nMapper--
-		m.filesState[rep.FileName] = 1
-	} else {
+	task := MrReply{}
 
-		checkState := func() bool {
-			for _, state := range m.filesState {
-				if state != 2 {
-					return false
-				}
+	isMapTaskAvailable := func() (string, true) {
+		for _fileName, state := range m.filesState {
+			if state == 0 {
+				return _fileName, true
 			}
-			return true
 		}
-		for checkState() == false {
-			m.c.Wait()
+		return "", false
+	}
+	isAllMapDone := func() bool {
+		for _, state := range m.filesState {
+			if state != 2 {
+				return false
+			}
 		}
-
-		if m.assembleFileDone == false {
-			fileMap := make(map[string]*os.File)
-
-			for i := 0; i < m.maxReducers; i++ {
-				fName := "mapper" + "-" + strconv.Itoa(i)
-				if _, err := os.Stat(fName); err == nil {
-					fileMap[fName], err = os.OpenFile(fName, os.O_APPEND|os.O_WRONLY, os.ModeAppend)
-					if err != nil {
-						log.Fatalln(err)
-					}
-				} else if os.IsNotExist(err) {
-					fileMap[fName], err = os.Create(fName)
-					if err != nil {
-						log.Fatalln(err)
-					}
-				} else {
-					fmt.Println("Something else is going on !")
-				}
+		return true
+	}
+	isReduceTaskAvailable := func() (string, bool) {
+		for _fileName, state := range m.ReducerFileState {
+			if state == 0 {
+				return _fileName, true
 			}
-			for _, fileName := range m.intermediateFiles {
-				parts := strings.SplitN(fileName, "-", -1) // parts = [mapper,X,Y]
-				fp, err := os.Open(fileName)               // open the file mapper-X-Y in read mode
-				if err != nil {
-					log.Fatalln(err)
-				}
-				_, err = io.Copy(fileMap["mapper"+"-"+parts[2]], fp)
-				if err != nil {
-					log.Fatalln(err)
-				}
-				fp.Close()
-			}
-			for fl, _ := range fileMap {
-				m.finalIntFiles = append(m.finalIntFiles, fl)
-			}
-			for _, v := range fileMap {
-				v.Close()
-			}
-			m.assembleFileDone = true
 		}
+		return "", false
+	}
 
-		if m.nReducer != m.maxReducers {
-			rep.FileName = m.finalIntFiles[m.nReducer]
-			rep.WorkerNum = m.nReducer + 1
-			rep.WorkType = "Reducer"
-			m.nReducer++
-			// fmt.Println("File Sent to Reducer = ", rep.FileName)
+	for {
+		flname, flag := isMapTaskAvailable()
+		if flag == true {
+			task.FileName = flname
+			task.WorkType = "Mapper"
+			task.WorkerNum = m.workerNum + 1
+			m.workerNum++
+			m.filesState[task.FileName] = 1 // mapper in progress
+			// start a timer
+			// start a go routing and give the timer
+			// that go routine should check the status of file given for the map task
+			// if that status is 2 then mapper has done the job correctly
+			// or else chnage the file state to 0 again
+			timerx := time.NewTimer(time.Second * 10)
+			go func(_flname string, _workerNum int) {
+				<-timerx.C
+				m.c.L.Lock()
+				if m.filesState[_flname] != 2 {
+					// mapper has not done its job in 10 sec
+					m.filesState[_flname] = 0
+					// if there are intermediate files related to the stopped mapper
+					// remove those files also
+
+					// this situation can be avoided if the mapper worker
+					// creates temp files in a seperate directory
+					// reply with those temp locations like ./xxDir/file.xyz
+					// and master outs finalIntermediate files in different dir
+				}
+
+			}(task.FileName, task.WorkerNum)
+			break
 		} else {
-			fmt.Println("All Tasks are assigned")
-			rep.FileName = "None"
-			rep.WorkerNum = -1
-			rep.WorkType = "None"
+			flag := isAllMapDone()
+			if flag == true {
+				if m.assembleFileDone == false {
+					fileMap := make(map[string]*os.File)
+
+					for i := 0; i < m.maxReducers; i++ {
+						fName := "mapper" + "-" + strconv.Itoa(i)
+						if _, err := os.Stat(fName); err == nil {
+							fileMap[fName], err = os.OpenFile(fName, os.O_APPEND|os.O_WRONLY, os.ModeAppend)
+							if err != nil {
+								log.Fatalln(err)
+							}
+						} else if os.IsNotExist(err) {
+							fileMap[fName], err = os.Create(fName)
+							if err != nil {
+								log.Fatalln(err)
+							}
+						} else {
+							fmt.Println("Something else is going on !")
+						}
+					}
+					for _, fileName := range m.intermediateFiles {
+						parts := strings.SplitN(fileName, "-", -1) // parts = [mapper,X,Y]
+						fp, err := os.Open(fileName)               // open the file mapper-X-Y in read mode
+						if err != nil {
+							log.Fatalln(err)
+						}
+						_, err = io.Copy(fileMap["mapper"+"-"+parts[2]], fp)
+						if err != nil {
+							log.Fatalln(err)
+						}
+						fp.Close()
+					}
+					for fl, _ := range fileMap {
+						m.finalIntFiles = append(m.finalIntFiles, fl)
+					}
+					for _, v := range fileMap {
+						v.Close()
+					}
+					m.assembleFileDone = true
+					for idx, flname := range m.finalIntFiles {
+						m.ReducerFileState[flname] = 0
+					}
+				}
+				// All map tasks are done final Intermediate files are also ready
+				flname, flag := isReduceTaskAvailable()
+				if flag {
+					task.FileName = flname
+					task.WorkType = "Reducer"
+					task.WorkerNum = m.workerNum + 1
+					m.ReducerFileState[flname] = 1
+					m.workerNum++
+					break
+				} else {
+					// continue
+					m.c.Wait() // sleep
+					continue
+				}
+			} else {
+				// or block
+				m.c.Wait() // sleep
+				continue
+			}
 		}
 
 	}
+
 	m.c.L.Unlock()
 	*reply = rep
 	return nil
@@ -198,7 +252,7 @@ func (m *Master) Done_() bool {
 			var err = os.Remove(f)
 			if err != nil {
 				log.Fatalln(err)
-				
+
 			}
 		}
 		for _, f := range m.finalIntFiles {
@@ -237,6 +291,8 @@ func MakeMaster(files []string, nReduce int) *Master {
 	m.c = sync.NewCond(&m.mux)
 	m.assembleFileDone = false
 	m.jobDone = false
+	m.workerNum = 0
+	m.ReducerFileState = make(map[string]int)
 
 	m.server()
 	return &m
