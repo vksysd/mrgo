@@ -8,6 +8,7 @@ import (
 	"log"
 	"net/rpc"
 	"os"
+	"path/filepath"
 	"sort"
 	"strconv"
 )
@@ -70,9 +71,15 @@ func Worker(mapf func(string, string) []KeyValue,
 			// The following logic creates files of type mapper-X-Y
 			// X = workernum
 			// Y = Final Intermediate file
+			dirName := strconv.Itoa(workernum)
+			err = os.Mkdir(dirName, 0755)
+			if err != nil {
+				log.Fatalln(err)
+			}
 			fileMap := make(map[string]*os.File)
 			for i := 0; i < 10; i++ {
 				fName := "mapper" + "-" + strconv.Itoa(workernum) + "-" + strconv.Itoa(i)
+				fName = filepath.Join(dirName, fName)
 				if _, err := os.Stat(fName); err == nil {
 					fileMap[fName], err = os.OpenFile(fName, os.O_APPEND|os.O_WRONLY, os.ModeAppend)
 					if err != nil {
@@ -92,6 +99,7 @@ func Worker(mapf func(string, string) []KeyValue,
 			for _, kv := range kva {
 				filenumber := ihash(kv.Key) % 10
 				intermediatefile = "mapper" + "-" + strconv.Itoa(workernum) + "-" + strconv.Itoa(filenumber)
+				intermediatefile = filepath.Join(dirName, intermediatefile)
 				if _, ok := FileSet[intermediatefile]; !ok {
 					// intermediatefile does not exists in the SET of Intermediate Files
 					// Therefore Insert this intermediate file in the SET

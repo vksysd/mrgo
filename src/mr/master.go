@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/rpc"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -71,10 +72,17 @@ func (m *Master) RequestTask(req MrRequest, reply *MrReply) error {
 		}
 
 		if m.assembleFileDone == false {
-			fileMap := make(map[string]*os.File)
 
+			dirName := "mr-intermediate"
+			err := os.Mkdir(dirName, 0755)
+			if err != nil {
+				log.Fatalln(err)
+			}
+			//files are : /mr-intermediate/mapper-Y
+			fileMap := make(map[string]*os.File)
 			for i := 0; i < m.maxReducers; i++ {
 				fName := "mapper" + "-" + strconv.Itoa(i)
+				fName = filepath.Join(dirName, fName)
 				if _, err := os.Stat(fName); err == nil {
 					fileMap[fName], err = os.OpenFile(fName, os.O_APPEND|os.O_WRONLY, os.ModeAppend)
 					if err != nil {
@@ -89,13 +97,16 @@ func (m *Master) RequestTask(req MrRequest, reply *MrReply) error {
 					fmt.Println("Something else is going on !")
 				}
 			}
-			for _, fileName := range m.intermediateFiles {
+			for _, filePath := range m.intermediateFiles {
+				// filePath = /7/mapper-7-4
+				fileName := filepath.Base(filePath) // = mapper-7-4
+				// dirName := filepath.Dir(filePath)          // = 7
 				parts := strings.SplitN(fileName, "-", -1) // parts = [mapper,X,Y]
-				fp, err := os.Open(fileName)               // open the file mapper-X-Y in read mode
+				fp, err := os.Open(filePath)               // open the file /7/mapper-7-4 in read mode
 				if err != nil {
 					log.Fatalln(err)
 				}
-				_, err = io.Copy(fileMap["mapper"+"-"+parts[2]], fp)
+				_, err = io.Copy(fileMap[filepath.Join(dirName, "mapper"+"-"+parts[2])], fp)
 				if err != nil {
 					log.Fatalln(err)
 				}
@@ -194,18 +205,24 @@ func (m *Master) Done_() bool {
 	m.c.L.Lock()
 	if m.completedReducersCount == m.maxReducers {
 		ret = true
+		dirsSet := make(map[string]bool)
 		for _, f := range m.intermediateFiles {
-			var err = os.Remove(f)
-			if err != nil {
-				log.Fatalln(err)
-				
+			if _, ok := dirsSet[filepath.Dir(f)]; !ok {
+				// filepath.Dir(f) does not exisits in the candidate delete dirs
+				dirsSet[filepath.Dir(f)] = true
 			}
 		}
-		for _, f := range m.finalIntFiles {
-			var err = os.Remove(f)
+		for _dir, _ := range dirsSet {
+			fmt.Println("Removing dir ...", _dir)
+			// os.Remove(emptydir)
+			err := os.RemoveAll(_dir)
 			if err != nil {
-				log.Fatalln(err)
+				log.Println(err)
 			}
+		}
+		err := os.RemoveAll("mr-intermediate")
+		if err != nil {
+			log.Println(err)
 		}
 	}
 	m.c.L.Unlock()
