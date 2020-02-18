@@ -50,7 +50,7 @@ func Worker(mapf func(string, string) []KeyValue,
 		var intermediatefile string
 
 		filename, workernum, worktype = CallRequestTask()
-		if workernum == -1 {
+		if workernum == -1 || filename == "" {
 			fmt.Println("Job is complete. Worker exiting...")
 			break
 		}
