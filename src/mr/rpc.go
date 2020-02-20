@@ -27,8 +27,8 @@ type MrReply struct {
 
 type MapperRequest struct {
 	FileName              []string
-	MapperState           int
 	OriginalFileAllocated string
+	WorkerNum             int
 }
 
 type ReducerRequest struct {
