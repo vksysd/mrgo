@@ -32,9 +32,9 @@ type MapperRequest struct {
 }
 
 type ReducerRequest struct {
-	FileName string
-	// once the reducer completes it sends its state as 1
-	ReducerState int
+	FileName              string
+	OriginalFileAllocated string
+	WorkerNum             int
 }
 
 type MrRequest struct {

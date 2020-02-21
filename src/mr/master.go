@@ -16,6 +16,19 @@ import (
 	"time"
 )
 
+const (
+	MAPPER_NOT_STARTED  = 0
+	MAPPER_IN_PROGRESS  = 1
+	MAPPER_DONE         = 2
+	REDUCER_NOT_STARTED = 3
+	REDUCER_IN_PROGRESS = 4
+	REDUCER_DONE        = 5
+	MAPPER_WORK         = "Mapper"
+	REDUCE_WORK         = "Reducer"
+	TIME_OUT_MAPPER     = 10
+	TIME_OUT_REDUCER    = 10
+)
+
 type Master struct {
 	// Your definitions here.
 	filesState             map[string]int
@@ -23,7 +36,6 @@ type Master struct {
 	nMapper                int // total number of mapper worker
 	nReducer               int
 	intermediateFiles      []string
-	reducerFiles           []string
 	finalIntFiles          []string
 	maxReducers            int
 	completedReducersCount int
@@ -34,6 +46,7 @@ type Master struct {
 	workerNum              int
 	ReducerFileState       map[string]int
 	InvalidMapperWorker    map[int]int
+	InvalidReduceWorker    map[int]int
 }
 
 // Your code here -- RPC handlers for the worker to call.
@@ -59,7 +72,7 @@ func (m *Master) RequestTask(req MrRequest, reply *MrReply) error {
 
 	isMapTaskAvailable := func() (string, bool) {
 		for _fileName, state := range m.filesState {
-			if state == 0 {
+			if state == MAPPER_NOT_STARTED {
 				return _fileName, true
 			}
 		}
@@ -67,7 +80,7 @@ func (m *Master) RequestTask(req MrRequest, reply *MrReply) error {
 	}
 	isAllMapDone := func() bool {
 		for _, state := range m.filesState {
-			if state != 2 {
+			if state != MAPPER_DONE {
 				return false
 			}
 		}
@@ -75,7 +88,7 @@ func (m *Master) RequestTask(req MrRequest, reply *MrReply) error {
 	}
 	isReduceTaskAvailable := func() (string, bool) {
 		for _fileName, state := range m.ReducerFileState {
-			if state == 0 {
+			if state == REDUCER_NOT_STARTED {
 				return _fileName, true
 			}
 		}
@@ -83,7 +96,7 @@ func (m *Master) RequestTask(req MrRequest, reply *MrReply) error {
 	}
 	isAllReduceDone := func() bool {
 		for _, state := range m.ReducerFileState {
-			if state != 2 {
+			if state != REDUCER_DONE {
 				return false
 			}
 		}
@@ -92,59 +105,42 @@ func (m *Master) RequestTask(req MrRequest, reply *MrReply) error {
 	for {
 		flname, flag := isMapTaskAvailable()
 		if flag == true {
+			fmt.Println("Map task available")
 			task.FileName = flname
-			task.WorkType = "Mapper"
+			task.WorkType = MAPPER_WORK
 			task.WorkerNum = m.workerNum + 1
 			m.workerNum++
-			m.filesState[task.FileName] = 1 // mapper in progress
+			m.filesState[task.FileName] = MAPPER_IN_PROGRESS // mapper in progress
 
 			// start a timer
-			ctx, _ := context.WithTimeout(context.Background(), time.Duration(4)*time.Second)
-			// start a go routing and give the timer
+			ctx, _ := context.WithTimeout(context.Background(), time.Duration(
+				TIME_OUT_MAPPER)*time.Second)
+			// start a go routing to handle timeout
 			go func(n int, flName string) {
 				<-ctx.Done()
 				m.c.L.Lock()
 
-				if m.filesState[flName] != 2 {
-					// it means the mapper worker has not completed the work in time
-					// therefore make the filestate of that file to unprocessed or ready to process
-					// which is 1
-					m.filesState[flName] = 0
+				if m.filesState[flName] != MAPPER_DONE {
+					// it means the mapper worker has not completed the work in
+					// time therefore => make the filestate of that file to
+					// MAPPER_NOT_STARTED
+					m.filesState[flName] = MAPPER_NOT_STARTED
 					m.InvalidMapperWorker[n] = 1 // do not process MapperDone() RPC
-					fmt.Println("Timer expired for Mapper Worker ", n, " filename ", flName)
-					fmt.Println("Work will be reassigned to other mapper")
+					fmt.Println("Timeout for Mapper Worker ", n, " filename ", flName)
 				}
-				// check if
+				// also wake up one or more sleeping worker for map task
 				m.c.L.Unlock()
-			}(task.WorkerNum, flname)
-			// that go routine should check the status of file given for the map task
-			// if that status is 2 then mapper has done the job correctly
-			// or else chnage the file state to 0 again
-			// TODO TIMER IMPLEMENT
-			// timerx := time.NewTimer(time.Second * 10)
-			// go func(_flname string, _workerNum int) {
-			// 	<-timerx.C
-			// 	m.c.L.Lock()
-			// 	if m.filesState[_flname] != 2 {
-			// 		// mapper has not done its job in 10 sec
-			// 		m.filesState[_flname] = 0
-			// 		// if there are intermediate files related to the stopped mapper
-			// 		// remove those files also
+				m.c.Signal()
+			}(task.WorkerNum, task.FileName)
 
-			// 		// this situation can be avoided if the mapper worker
-			// 		// creates temp files in a seperate directory
-			// 		// reply with those temp locations like ./xxDir/file.xyz
-			// 		// and master outs finalIntermediate files in different dir
-			// 	}
-
-			// }(task.FileName, task.WorkerNum)
-			fmt.Println("file ", flname, " is given to worker no ", task.WorkerNum)
+			fmt.Println("File ", flname, " is given to worker no ", task.WorkerNum)
+			// done with assigning a mapper task, break the loop
 			break
 		} else {
 			flag := isAllMapDone()
 			if flag == true {
+				fmt.Println("ALl mapper done!")
 				if m.assembleFileDone == false {
-
 					dirName := "mr-intermediate"
 					err := os.Mkdir(dirName, 0755)
 					if err != nil {
@@ -167,13 +163,14 @@ func (m *Master) RequestTask(req MrRequest, reply *MrReply) error {
 								log.Fatalln(err)
 							}
 						} else {
-							fmt.Println("Something else is going on !")
+							fmt.Println("Unexpected Error occured in Creating File")
 						}
 					}
 					for _, filePath := range m.intermediateFiles {
-						// filePath = /7/mapper-7-4
+						// filePath can be of type /X/mapper-X-Y
 						fileName := filepath.Base(filePath) // = mapper-7-4
 						_dirName := filepath.Dir(filePath)
+						// get the worknum corresponding to this file
 						wkn, err := strconv.Atoi(_dirName)
 						if err != nil {
 							log.Println(err)
@@ -181,10 +178,8 @@ func (m *Master) RequestTask(req MrRequest, reply *MrReply) error {
 						// if this directory belongs to a invalidated worker
 						// do not process the directory and ignore
 						if _, ok := m.InvalidMapperWorker[wkn]; ok {
-							//fmt.Println("Work of mapper worker ", wkn, " is ignored!")
 							continue
 						}
-						// = 7
 						parts := strings.SplitN(fileName, "-", -1) // parts = [mapper,X,Y]
 						fp, err := os.Open(filePath)               // open the file /7/mapper-7-4 in read mode
 						if err != nil {
@@ -203,40 +198,65 @@ func (m *Master) RequestTask(req MrRequest, reply *MrReply) error {
 						v.Close()
 					}
 					m.assembleFileDone = true
+					// initialize the states of final intermediate files
+					// set them to REDUCER_NOT_STARTED
 					for _, flname := range m.finalIntFiles {
-						m.ReducerFileState[flname] = 0
+						m.ReducerFileState[flname] = REDUCER_NOT_STARTED
 					}
 				}
 				// All map tasks are done final Intermediate files are also ready
 				flname, flag := isReduceTaskAvailable()
 				if flag {
+					fmt.Println("Reduce task available")
 					task.FileName = flname
-					task.WorkType = "Reducer"
+					task.WorkType = REDUCE_WORK
 					task.WorkerNum = m.workerNum + 1
-					m.ReducerFileState[flname] = 1
+					m.ReducerFileState[flname] = REDUCER_IN_PROGRESS
 					m.workerNum++
+					ctx, _ := context.WithTimeout(context.Background(), time.Duration(
+						TIME_OUT_REDUCER)*time.Second)
+					// start a go routing to handle timeout
+					go func(n int, flName string) {
+						<-ctx.Done()
+						m.c.L.Lock()
+
+						if m.ReducerFileState[flName] != REDUCER_DONE {
+							// it means the reducer worker has not completed the work in
+							// time therefore => make the filestate of that file to
+							// REDUCER_NOT_STARTED
+							m.ReducerFileState[flName] = REDUCER_NOT_STARTED
+							m.InvalidReduceWorker[n] = 1 // do not process ReduceDone() RPC
+							fmt.Println("Timeout Reducer Worker ", n, " filename ", flName)
+						}
+						m.c.L.Unlock()
+						m.c.Signal()
+					}(task.WorkerNum, task.FileName)
 					fmt.Println("file ", flname, " is given to worker no ", task.WorkerNum)
 					break
 				} else {
 					// continue
 					flag := isAllReduceDone()
 					if flag {
-						fmt.Println("All Tasks are assigned")
+						fmt.Println("All Reduce Tasks are assigned")
 						task.FileName = "None"
 						task.WorkerNum = -1
 						task.WorkType = "None"
 						break
+
 					} else {
 						// some reduce work are going on .. wait ...
+						fmt.Println("Sleep in the wait of reduce task")
 						m.c.Wait() // sleep
+						fmt.Println("Woke up after sleep for reduce work")
 						continue
 					}
 
 				}
 			} else {
 				// or block
+				fmt.Println("Sleep in the wait of map task")
 				m.c.Wait() // sleep
-				continue
+				fmt.Println("Woke up after sleep for map work")
 			}
 		}
 
@@ -248,7 +268,6 @@ func (m *Master) RequestTask(req MrRequest, reply *MrReply) error {
 }
 
 func (m *Master) MapperDone(req *MapperRequest, reply *MrEmpty) error {
-	//fmt.Println(req)
 	for _, filename := range req.FileName {
 		var fileExists bool
 		for _, ele := range m.intermediateFiles {
@@ -259,7 +278,6 @@ func (m *Master) MapperDone(req *MapperRequest, reply *MrEmpty) error {
 		}
 		if !fileExists {
 			m.c.L.Lock()
-			// change the state only if the worker is is a valid one
 			m.intermediateFiles = append(m.intermediateFiles, filename)
 			m.c.L.Unlock()
 		}
@@ -268,21 +286,33 @@ func (m *Master) MapperDone(req *MapperRequest, reply *MrEmpty) error {
 	m.c.L.Lock()
 	_, ok := m.InvalidMapperWorker[req.WorkerNum]
 	if ok == false {
-		m.filesState[req.OriginalFileAllocated] = 2
+		m.filesState[req.OriginalFileAllocated] = MAPPER_DONE
 	} else {
 		fmt.Println("Intermediate files from worker = ", req.WorkerNum, " has been rejected for original file", req.OriginalFileAllocated)
 	}
 	m.c.L.Unlock()
 
-	m.c.Signal()
+	m.c.Signal() // to wake up any worker RPC handler thread
 
 	return nil
 }
 
 func (m *Master) ReducerDone(req *ReducerRequest, reply *MrEmpty) error {
 	m.c.L.Lock()
-	m.reducerFiles = append(m.reducerFiles, req.FileName)
-	m.completedReducersCount += req.ReducerState
+	_, ok := m.InvalidReduceWorker[req.WorkerNum]
+	if ok == false {
+		m.ReducerFileState[req.OriginalFileAllocated] = REDUCER_DONE
+		m.completedReducersCount += 1
+	} else {
+		fmt.Println("Output file from worker = ", req.WorkerNum, " has been rejected for original file", req.OriginalFileAllocated)
+		// immediately delete the output file procedured by this invalidated
+		// reduce worker
+		err := os.Remove(req.FileName)
+		if err != nil {
+			log.Println(err)
+		}
+	}
+
 	m.c.L.Unlock()
 	m.c.Broadcast() // special use
 	return nil
@@ -327,13 +357,10 @@ func (m *Master) Done_() bool {
 		dirsSet := make(map[string]bool)
 		for _, f := range m.intermediateFiles {
 			if _, ok := dirsSet[filepath.Dir(f)]; !ok {
-				// filepath.Dir(f) does not exisits in the candidate delete dirs
 				dirsSet[filepath.Dir(f)] = true
 			}
 		}
 		for _dir, _ := range dirsSet {
-			fmt.Println("Removing dir ...", _dir)
-			// os.Remove(emptydir)
 			err := os.RemoveAll(_dir)
 			if err != nil {
 				log.Println(err)
@@ -358,7 +385,6 @@ func MakeMaster(files []string, nReduce int) *Master {
 	m.nMapper = 0
 	m.intermediateFiles = make([]string, 0)
 	m.finalIntFiles = make([]string, 0)
-	m.reducerFiles = make([]string, 0)
 
 	m.nReducer = 0
 	m.maxReducers = nReduce
@@ -376,6 +402,7 @@ func MakeMaster(files []string, nReduce int) *Master {
 	m.workerNum = 0
 	m.ReducerFileState = make(map[string]int)
 	m.InvalidMapperWorker = make(map[int]int)
+	m.InvalidReduceWorker = make(map[int]int)
 
 	m.server()
 	return &m
