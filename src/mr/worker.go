@@ -137,6 +137,11 @@ func Worker(mapf func(string, string) []KeyValue,
 		} else {
 			// call reducef
 			fmt.Println("Got a reduce task from master with filename = ", filename)
+			rndn := rand.Intn(10)
+			if rndn == 1 || rndn == 2 {
+				fmt.Println("10 Sec delay...therefore ", filename, " processing will be waste")
+				time.Sleep(time.Second * time.Duration(7))
+			}
 			intermediatefile = filename
 			intermediatekva := []KeyValue{}
 			x, err := os.Open(intermediatefile)
@@ -178,8 +183,9 @@ func Worker(mapf func(string, string) []KeyValue,
 
 			ofile.Close()
 			// notify master that reducer has finished its job
-			rReq := ReducerRequest{oname, 1}
+			rReq := ReducerRequest{oname, filename, workernum}
 			CallReducerDone(rReq)
+			fmt.Println("Reducer Task Done! :", workernum)
 		}
 	}
 
