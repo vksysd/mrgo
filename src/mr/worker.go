@@ -6,11 +6,13 @@ import (
 	"hash/fnv"
 	"io/ioutil"
 	"log"
+	"math/rand"
 	"net/rpc"
 	"os"
 	"path/filepath"
 	"sort"
 	"strconv"
+	"time"
 )
 
 //
@@ -42,7 +44,7 @@ func ihash(key string) int {
 //
 func Worker(mapf func(string, string) []KeyValue,
 	reducef func(string, []string) string) {
-
+	rand.Seed(time.Now().UnixNano())
 	for {
 		var filename string
 		var workernum int
@@ -50,12 +52,19 @@ func Worker(mapf func(string, string) []KeyValue,
 		var intermediatefile string
 
 		filename, workernum, worktype = CallRequestTask()
+		// time.Sleep(time.Second * 2)
 		if workernum == -1 || filename == "" {
 			fmt.Println("Job is complete. Worker exiting...")
 			break
 		}
 		if worktype == "Mapper" {
+			// generate some random ness to wait for very long time or crash
 			fmt.Println("Got a map task from master with filename = ", filename)
+			rndn := rand.Intn(10)
+			if rndn == 1 || rndn == 2 {
+				fmt.Println("10 Sec delay...therefore ", filename, " processing will be waste")
+				time.Sleep(time.Second * time.Duration(7))
+			}
 			file, err := os.Open(filename)
 			if err != nil {
 				log.Fatalln("cannot open %v", filename)
@@ -117,7 +126,11 @@ func Worker(mapf func(string, string) []KeyValue,
 				intermediatefileList = append(intermediatefileList, k)
 			}
 			// fmt.Println("Number of files sent to master = ", len(intermediatefileList)) // output should be <= 10
-			mRequest := MapperRequest{intermediatefileList, 2, filename} // 2 means mapper task is done
+			mRequest := MapperRequest{} // 2 means mapper task is done
+			mRequest.FileName = intermediatefileList
+			// mRequest.MapperState = 2
+			mRequest.OriginalFileAllocated = filename
+			mRequest.WorkerNum = workernum
 			CallMapperDone(mRequest)
 			fmt.Println("Mapper Task Done! :", workernum)
 
@@ -216,6 +229,7 @@ func CallMapperDone(req MapperRequest) {
 
 	// declare a reply structure.
 	reply := MrEmpty{}
+	//fmt.Println(req, " is sent")
 
 	// send the RPC request, wait for the reply.
 	call("Master.MapperDone", &req, &reply)
@@ -251,6 +265,6 @@ func call(rpcname string, args interface{}, reply interface{}) bool {
 		return true
 	}
 
-	fmt.Println(err)
+	// fmt.Println(err)
 	return false
 }
