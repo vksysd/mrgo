@@ -25,8 +25,8 @@ const (
 	REDUCER_DONE        = 5
 	MAPPER_WORK         = "Mapper"
 	REDUCE_WORK         = "Reducer"
-	TIME_OUT_MAPPER     = 4
-	TIME_OUT_REDUCER    = 4
+	TIME_OUT_MAPPER     = 10
+	TIME_OUT_REDUCER    = 10
 )
 
 type Master struct {
@@ -128,7 +128,9 @@ func (m *Master) RequestTask(req MrRequest, reply *MrReply) error {
 					m.InvalidMapperWorker[n] = 1 // do not process MapperDone() RPC
 					fmt.Println("Timeout for Mapper Worker ", n, " filename ", flName)
 				}
+				// also wake up one or more sleeping worker for map task
 				m.c.L.Unlock()
+				m.c.Signal()
 			}(task.WorkerNum, task.FileName)
 
 			fmt.Println("File ", flname, " is given to worker no ", task.WorkerNum)
@@ -227,6 +229,7 @@ func (m *Master) RequestTask(req MrRequest, reply *MrReply) error {
 							fmt.Println("Timeout Reducer Worker ", n, " filename ", flName)
 						}
 						m.c.L.Unlock()
+						m.c.Signal()
 					}(task.WorkerNum, task.FileName)
 					fmt.Println("file ", flname, " is given to worker no ", task.WorkerNum)
 					break

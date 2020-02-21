@@ -152,51 +152,51 @@ wait ; wait
 
 
 
-# # generate the correct output
-# ../mrsequential ../../mrapps/nocrash.so ../pg*txt || exit 1
-# sort mr-out-0 > mr-correct-crash.txt
-# rm -f mr-out*
+# generate the correct output
+../mrsequential ../../mrapps/nocrash.so ../pg*txt || exit 1
+sort mr-out-0 > mr-correct-crash.txt
+rm -f mr-out*
 
-# echo '***' Starting crash test.
+echo '***' Starting crash test.
 
-# rm -f mr-done
-# (../mrmaster ../pg*txt ; touch mr-done ) &
-# sleep 1
+rm -f mr-done
+(../mrmaster ../pg*txt ; touch mr-done ) &
+sleep 1
 
-# # start multiple workers
-# ../mrworker ../../mrapps/crash.so &
+# start multiple workers
+../mrworker ../../mrapps/crash.so &
 
-# ( while [ -e mr-socket -a ! -f mr-done ]
-#   do
-#     ../mrworker ../../mrapps/crash.so 
-#     sleep 1
-#   done ) &
+( while [ -e mr-socket -a ! -f mr-done ]
+  do
+    ../mrworker ../../mrapps/crash.so 
+    sleep 1
+  done ) &
 
-# ( while [ -e mr-socket -a ! -f mr-done ]
-#   do
-#     ../mrworker ../../mrapps/crash.so 
-#     sleep 1
-#   done ) &
+( while [ -e mr-socket -a ! -f mr-done ]
+  do
+    ../mrworker ../../mrapps/crash.so 
+    sleep 1
+  done ) &
 
-# while [ -e mr-socket -a ! -f mr-done ]
-# do
-#   ../mrworker ../../mrapps/crash.so 
-#   sleep 1
-# done
+while [ -e mr-socket -a ! -f mr-done ]
+do
+  ../mrworker ../../mrapps/crash.so 
+  sleep 1
+done
 
-# wait
-# wait
-# wait
+wait
+wait
+wait
 
-# rm mr-socket
-# sort mr-out* | grep . > mr-crash-all
-# if cmp mr-crash-all mr-correct-crash.txt
-# then
-#   echo '---' crash test: PASS
-# else
-#   echo '---' crash output is not the same as mr-correct-crash.txt
-#   echo '---' crash test: FAIL
-#   exit 1
-# fi
+rm mr-socket
+sort mr-out* | grep . > mr-crash-all
+if cmp mr-crash-all mr-correct-crash.txt
+then
+  echo '---' crash test: PASS
+else
+  echo '---' crash output is not the same as mr-correct-crash.txt
+  echo '---' crash test: FAIL
+  exit 1
+fi
 
-# echo '***' PASSED ALL TESTS
+echo '***' PASSED ALL TESTS
