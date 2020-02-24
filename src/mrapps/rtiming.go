@@ -10,10 +10,11 @@ package main
 import (
 	"fmt"
 	"io/ioutil"
-	"mr"
 	"os"
 	"syscall"
 	"time"
+
+	mr "github.com/ddeka0/mrgo/src/mr"
 )
 
 func nparallel(phase string) int {

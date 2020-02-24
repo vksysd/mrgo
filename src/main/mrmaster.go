@@ -11,9 +11,10 @@ package main
 
 import (
 	"fmt"
-	"mr"
 	"os"
 	"time"
+
+	mr "github.com/ddeka0/mrgo/src/mr"
 )
 
 func main() {

@@ -10,10 +10,11 @@ import (
 	"fmt"
 	"io/ioutil"
 	"log"
-	"mr"
 	"os"
 	"plugin"
 	"sort"
+
+	mr "github.com/ddeka0/mrgo/src/mr"
 )
 
 // for sorting by key.

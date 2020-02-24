@@ -13,9 +13,10 @@ package main
 import (
 	"fmt"
 	"log"
-	"mr"
 	"os"
 	"plugin"
+
+	mr "github.com/ddeka0/mrgo/src/mr"
 )
 
 func main() {
