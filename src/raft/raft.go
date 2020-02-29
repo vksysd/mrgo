@@ -17,16 +17,33 @@ package raft
 //   in the same server.
 //
 
-import "sync"
-import "sync/atomic"
-import "../labrpc"
+import (
+	"fmt"
+	"log"
+	"math/rand"
+	"sync"
+	"sync/atomic"
+	"time"
+
+	labrpc "github.com/ddeka0/mrgo/src/labrpc"
+)
+
+const (
+	// STATE_FOLLOWER .. Follwer state of raft server
+	STATE_FOLLOWER = 0
+	// STATE_CANDIDATE .. Follwer state of raft server
+	STATE_CANDIDATE = 1
+	// STATE_LEADER .. Follwer state of raft server
+	STATE_LEADER = 2
+
+	MAX_TIMEOUT = 300
+	MIN_TIMEOUT = 150
+)
 
 // import "bytes"
 // import "../labgob"
 
-
-
-//
+// ApplyMsg ...
 // as each Raft peer becomes aware that successive log entries are
 // committed, the peer should send an ApplyMsg to the service (or
 // tester) on the same server, via the applyCh passed to Make(). set
@@ -43,7 +60,7 @@ type ApplyMsg struct {
 	CommandIndex int
 }
 
-//
+// Raft ...
 // A Go object implementing a single Raft peer.
 //
 type Raft struct {
@@ -57,8 +74,20 @@ type Raft struct {
 	// Look at the paper's Figure 2 for a description of what
 	// state a Raft server must maintain.
 
+	// These are the states added from the Fig2 of raft paper
+	CurrentTerm          int
+	VotedFor             int
+	commitIndex          int
+	lastApplied          int
+	nextIndex            []int
+	matchIndex           []int
+	CurrentState         int
+	ElectionTimeOutTimer *time.Timer
+	Mtx                  sync.Mutex
+	VoteCount            int
 }
 
+// GetState ...
 // return currentTerm and whether this server
 // believes it is the leader.
 func (rf *Raft) GetState() (int, bool) {
@@ -66,6 +95,10 @@ func (rf *Raft) GetState() (int, bool) {
 	var term int
 	var isleader bool
 	// Your code here (2A).
+	rf.Mtx.Lock()
+	term = rf.CurrentTerm
+	isleader = (rf.CurrentState == STATE_LEADER)
+	rf.Mtx.Unlock()
 	return term, isleader
 }
 
@@ -84,7 +117,6 @@ func (rf *Raft) persist() {
 	// data := w.Bytes()
 	// rf.persister.SaveRaftState(data)
 }
-
 
 //
 // restore previously persisted state.
@@ -108,26 +140,47 @@ func (rf *Raft) readPersist(data []byte) {
 	// }
 }
 
-
-
-
-//
-// example RequestVote RPC arguments structure.
-// field names must start with capital letters!
-//
+// RequestVoteArgs ...
+// Fill in the RequestVoteArgs and RequestVoteReply structs. Modify Make()
+// to create a background goroutine that will kick off leader election periodically
+// by sending out RequestVote RPCs when it hasn't heard from another peer for a
+// while. This way a peer will learn who is the leader, if there is already a
+// leader, or become the leader itself. Implement the RequestVote() RPC handler
+// so that servers will vote for one another.
 type RequestVoteArgs struct {
 	// Your data here (2A, 2B).
+
+	// Arguments:
+	// term candidate’s term
+	// candidateId candidate requesting vote
+	// lastLogIndex index of candidate’s last log entry (§5.4)
+	// lastLogTerm term of candidate’s last log entry (§5.4)
+	Term         int
+	CandidateID  int
+	LastLogIndex int
+	LastLogTerm  int
 }
 
-//
+// RequestVoteReply ...
 // example RequestVote RPC reply structure.
 // field names must start with capital letters!
 //
 type RequestVoteReply struct {
 	// Your data here (2A).
+
+	// Results:
+	// term currentTerm, for candidate to update itself
+	// voteGranted true means candidate received vote
+	Term        int
+	VoteGranted int
 }
 
-//
+// AppendEntries ...
+func (rf *Raft) AppendEntries(args *RequestVoteArgs, reply *RequestVoteReply) {
+
+}
+
+// RequestVote ...
 // example RequestVote RPC handler.
 //
 func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
@@ -168,7 +221,6 @@ func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *Reques
 	return ok
 }
 
-
 //
 // the service using Raft (e.g. a k/v server) wants to start
 // agreement on the next command to be appended to Raft's log. if this
@@ -189,7 +241,6 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	isLeader := true
 
 	// Your code here (2B).
-
 
 	return index, term, isLeader
 }
@@ -231,12 +282,75 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.peers = peers
 	rf.persister = persister
 	rf.me = me
-
+	rf.VoteCount = 0
 	// Your initialization code here (2A, 2B, 2C).
 
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState())
 
+	// Server when statrs up, starts a follower
+	rf.CurrentState = STATE_FOLLOWER
+	rf.ElectionTimeOutTimer = time.NewTimer(time.Millisecond * time.Duration(
+		rand.Intn(MAX_TIMEOUT-MIN_TIMEOUT+1)+MIN_TIMEOUT))
 
+	go func() {
+		// kick off leader election periodically by sending out RequestVote RPCs
+		// when it hasn't heard from another peer for a while
+		for {
+			<-rf.ElectionTimeOutTimer.C
+			// We can start a new Election now
+			rf.Mtx.Lock()
+			if rf.CurrentState == STATE_FOLLOWER || rf.CurrentState == STATE_CANDIDATE {
+				rf.CurrentState = STATE_CANDIDATE
+				rf.CurrentTerm++
+				rf.VotedFor = rf.me
+				rf.VoteCount++
+				rf.ElectionTimeOutTimer.Reset(time.Millisecond * time.Duration(
+					rand.Intn(MAX_TIMEOUT-MIN_TIMEOUT+1)+MIN_TIMEOUT))
+
+				for serverID := range rf.peers {
+					var req = RequestVoteArgs{}
+					var rep = RequestVoteReply{}
+					req.CandidateID = rf.me
+					req.LastLogIndex = 0
+					req.LastLogTerm = 0
+					req.Term = rf.CurrentTerm
+					if serverID != me {
+						// Create a New Go Routine to Send And Block for Receive
+						go func() {
+							ok := rf.sendRequestVote(serverID, &req, &rep)
+							if !ok {
+								log.Println("Error in Sending RequestVote RPC!")
+							} else {
+								if rep.Term > rf.CurrentTerm {
+									rf.Mtx.Lock()
+									rf.CurrentState = STATE_FOLLOWER
+									rf.Mtx.Unlock()
+								}
+							}
+						}()
+					}
+				}
+				fmt.Println("Election Timeout !!! Sent a New RequestVote RPC !")
+				rf.Mtx.Unlock()
+			}
+		}
+	}()
+
+	go func() {
+		for {
+			// simulates a incoming message at any time
+			time.Sleep(time.Millisecond * time.Duration(rand.Intn(20-10+1)+10))
+			//fmt.Println("messages arrived at ", v)
+
+			// once any message is received reset the timer to 4 seconds again
+			rf.Mtx.Lock()
+			rf.ElectionTimeOutTimer.Reset(time.Millisecond * time.Duration(
+				rand.Intn(MAX_TIMEOUT-MIN_TIMEOUT+1)+MIN_TIMEOUT))
+			//t = time.NewTimer(time.Second * time.Duration(TimeOutTime))
+
+			rf.Mtx.Unlock()
+		}
+	}()
 	return rf
 }
