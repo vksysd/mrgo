@@ -21,7 +21,6 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"math/rand"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -305,7 +304,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 				// Election Timer expired.
 				t2 := time.Now()
 				fmt.Println("Election Started after timer expired after ", t2.Sub(t1))
-				d, cancel = context.WithTimeout(context.Background(), time.Millisecond*time.Duration(rand.Intn())) // if/as appropriate
+				d, cancel = context.WithTimeout(context.Background(), time.Millisecond*time.Duration(3)) // if/as appropriate
 
 				rf.Mtx.Lock()
 
