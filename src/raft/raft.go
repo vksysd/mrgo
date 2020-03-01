@@ -18,6 +18,7 @@ package raft
 //
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"math/rand"
@@ -75,16 +76,16 @@ type Raft struct {
 	// state a Raft server must maintain.
 
 	// These are the states added from the Fig2 of raft paper
-	CurrentTerm          int
-	VotedFor             int
-	commitIndex          int
-	lastApplied          int
-	nextIndex            []int
-	matchIndex           []int
-	CurrentState         int
-	ElectionTimeOutTimer *time.Timer
-	Mtx                  sync.Mutex
-	VoteCount            map[int]int
+	CurrentTerm  int
+	VotedFor     int
+	commitIndex  int
+	LastApplied  int
+	NextIndex    []int
+	MatchIndex   []int
+	CurrentState int
+	Mtx          sync.Mutex
+	VoteCount    map[int]int
+	msgC         chan struct{}
 }
 
 // GetState ...
@@ -172,7 +173,7 @@ type RequestVoteReply struct {
 	// term currentTerm, for candidate to update itself
 	// voteGranted true means candidate received vote
 	Term        int
-	VoteGranted int
+	VoteGranted bool
 }
 
 // AppendEntries ...
@@ -290,27 +291,31 @@ func Make(peers []*labrpc.ClientEnd, me int,
 
 	// Server when statrs up, starts a follower
 	rf.CurrentState = STATE_FOLLOWER
-	rf.ElectionTimeOutTimer = time.NewTimer(time.Millisecond * time.Duration(
-		rand.Intn(MAX_TIMEOUT-MIN_TIMEOUT+1)+MIN_TIMEOUT))
+	rf.msgC = make(chan struct{})
 
 	go func() {
 		// kick off leader election periodically by sending out RequestVote RPCs
 		// when it hasn't heard from another peer for a while
-		for {
-			<-rf.ElectionTimeOutTimer.C
-			// We can start a new Election now
-			rf.Mtx.Lock()
-			if rf.CurrentState == STATE_FOLLOWER || rf.CurrentState == STATE_CANDIDATE {
-				rf.CurrentState = STATE_CANDIDATE
-				rf.CurrentTerm++
-				rf.VotedFor = rf.me
-				//rf.VoteCount++
-				rf.ElectionTimeOutTimer.Reset(time.Millisecond * time.Duration(
-					rand.Intn(MAX_TIMEOUT-MIN_TIMEOUT+1)+MIN_TIMEOUT))
 
-				go func(_thisTerm int) {
-					var _currentTerm = rf.Curr_currentTerm
-					var _currentState = rf.Curr_currentState
+		d, cancel := context.WithTimeout(context.Background(), time.Second*time.Duration(3))
+		for {
+			t1 := time.Now()
+			select {
+			case <-d.Done():
+				// Election Timer expired.
+				t2 := time.Now()
+				fmt.Println("Election Started after timer expired after ", t2.Sub(t1))
+				d, cancel = context.WithTimeout(context.Background(), time.Millisecond*time.Duration(rand.Intn())) // if/as appropriate
+
+				rf.Mtx.Lock()
+
+				if rf.CurrentState == STATE_FOLLOWER || rf.CurrentState == STATE_CANDIDATE {
+					rf.CurrentState = STATE_CANDIDATE
+					rf.CurrentTerm++
+					rf.VotedFor = rf.me
+					//rf.VoteCount++
+					var _currentTerm = rf.CurrentTerm
+					// var _currentState = rf.CurrentState
 					var VoteCountForThisTerm int
 					var VoteCntLock sync.Mutex
 					var wg sync.WaitGroup
@@ -323,7 +328,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 						req.CandidateID = rf.me
 						req.LastLogIndex = 0
 						req.LastLogTerm = 0
-						req.Term = rf.CurrentTerm
+						req.Term = _currentTerm
 						if serverID != me {
 							// Create a New Go Routine to Send And Block for Receive
 							wg.Add(1)
@@ -353,7 +358,6 @@ func Make(peers []*labrpc.ClientEnd, me int,
 						}
 					}
 					wg.Wait() // wait for all the routines to reply
-					rf.Mtx.Lock()
 					if rf.CurrentState == STATE_CANDIDATE && rf.CurrentTerm == _currentTerm {
 						if VoteCountForThisTerm > (len(rf.peers) / 2) {
 							rf.CurrentState = STATE_LEADER
@@ -366,30 +370,18 @@ func Make(peers []*labrpc.ClientEnd, me int,
 					} else {
 						log.Println("Something might have happened in between!")
 					}
-					tf.Mtx.Unlock()
-
-				}(rf.CurrentTerm)
-
-				fmt.Println("Election Timeout !!! Sent a New RequestVote RPC !")
+				}
 				rf.Mtx.Unlock()
+
+			case <-rf.msgC:
+				// got message - cancel existing ElectionTimer and get new one
+				t2 := time.Now()
+				cancel()
+				d, cancel = context.WithTimeout(context.Background(), time.Second*time.Duration(3))
+				fmt.Println("Election Timer Reset after ", t2.Sub(t1))
 			}
 		}
 	}()
 
-	go func() {
-		for {
-			// simulates a incoming message at any time
-			time.Sleep(time.Millisecond * time.Duration(rand.Intn(20-10+1)+10))
-			//fmt.Println("messages arrived at ", v)
-
-			// once any message is received reset the timer to 4 seconds again
-			rf.Mtx.Lock()
-			rf.ElectionTimeOutTimer.Reset(time.Millisecond * time.Duration(
-				rand.Intn(MAX_TIMEOUT-MIN_TIMEOUT+1)+MIN_TIMEOUT))
-			//t = time.NewTimer(time.Second * time.Duration(TimeOutTime))
-
-			rf.Mtx.Unlock()
-		}
-	}()
 	return rf
 }
