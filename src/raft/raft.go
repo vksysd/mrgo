@@ -84,7 +84,7 @@ type Raft struct {
 	CurrentState         int
 	ElectionTimeOutTimer *time.Timer
 	Mtx                  sync.Mutex
-	VoteCount            int
+	VoteCount            map[int]int
 }
 
 // GetState ...
@@ -282,7 +282,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.peers = peers
 	rf.persister = persister
 	rf.me = me
-	rf.VoteCount = 0
+	rf.VoteCount = make(map[int]int)
 	// Your initialization code here (2A, 2B, 2C).
 
 	// initialize from state persisted before a crash
@@ -304,33 +304,72 @@ func Make(peers []*labrpc.ClientEnd, me int,
 				rf.CurrentState = STATE_CANDIDATE
 				rf.CurrentTerm++
 				rf.VotedFor = rf.me
-				rf.VoteCount++
+				//rf.VoteCount++
 				rf.ElectionTimeOutTimer.Reset(time.Millisecond * time.Duration(
 					rand.Intn(MAX_TIMEOUT-MIN_TIMEOUT+1)+MIN_TIMEOUT))
 
-				for serverID := range rf.peers {
-					var req = RequestVoteArgs{}
-					var rep = RequestVoteReply{}
-					req.CandidateID = rf.me
-					req.LastLogIndex = 0
-					req.LastLogTerm = 0
-					req.Term = rf.CurrentTerm
-					if serverID != me {
-						// Create a New Go Routine to Send And Block for Receive
-						go func() {
-							ok := rf.sendRequestVote(serverID, &req, &rep)
-							if !ok {
-								log.Println("Error in Sending RequestVote RPC!")
-							} else {
-								if rep.Term > rf.CurrentTerm {
-									rf.Mtx.Lock()
-									rf.CurrentState = STATE_FOLLOWER
-									rf.Mtx.Unlock()
+				go func(_thisTerm int) {
+					var _currentTerm = rf.Curr_currentTerm
+					var _currentState = rf.Curr_currentState
+					var VoteCountForThisTerm int
+					var VoteCntLock sync.Mutex
+					var wg sync.WaitGroup
+					VoteCntLock.Lock()
+					VoteCountForThisTerm++ // Self Vote
+					VoteCntLock.Unlock()
+					for serverID := range rf.peers {
+						var req = RequestVoteArgs{}
+						var rep = RequestVoteReply{}
+						req.CandidateID = rf.me
+						req.LastLogIndex = 0
+						req.LastLogTerm = 0
+						req.Term = rf.CurrentTerm
+						if serverID != me {
+							// Create a New Go Routine to Send And Block for Receive
+							wg.Add(1)
+							go func() {
+								defer wg.Done()
+								ok := rf.sendRequestVote(serverID, &req, &rep)
+								if !ok {
+									log.Println("Error in Sending RequestVote RPC!")
+								} else {
+									if rep.Term > _currentTerm {
+										rf.Mtx.Lock()
+										// TODO move to followe state
+										// stop processing this election votes or
+										// sending requestVote rpc
+										// TODO check
+										rf.CurrentState = STATE_FOLLOWER
+										rf.Mtx.Unlock()
+									} else {
+										if rep.VoteGranted {
+											VoteCntLock.Lock()
+											VoteCountForThisTerm++
+											VoteCntLock.Unlock()
+										}
+									}
 								}
-							}
-						}()
+							}()
+						}
 					}
-				}
+					wg.Wait() // wait for all the routines to reply
+					rf.Mtx.Lock()
+					if rf.CurrentState == STATE_CANDIDATE && rf.CurrentTerm == _currentTerm {
+						if VoteCountForThisTerm > (len(rf.peers) / 2) {
+							rf.CurrentState = STATE_LEADER
+							// Send messages to AppendEntried go routine to send
+							// heartbeats to the followers
+							// that go routine will sleep for some time and wakes up
+							// check this state
+							// if LEADER then sends out HeartBeats
+						}
+					} else {
+						log.Println("Something might have happened in between!")
+					}
+					tf.Mtx.Unlock()
+
+				}(rf.CurrentTerm)
+
 				fmt.Println("Election Timeout !!! Sent a New RequestVote RPC !")
 				rf.Mtx.Unlock()
 			}
