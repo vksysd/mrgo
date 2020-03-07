@@ -19,7 +19,6 @@ package raft
 
 import (
 	"context"
-	"fmt"
 	"log"
 	"math/rand"
 	"sync"
@@ -82,17 +81,18 @@ type Raft struct {
 	// state a Raft server must maintain.
 
 	// These are the states added from the Fig2 of raft paper
-	CurrentTerm  int
-	VotedFor     int
-	commitIndex  int
-	LastApplied  int
-	NextIndex    []int
-	MatchIndex   []int
-	CurrentState int
-	Mtx          sync.Mutex
-	VoteCount    map[int]int
-	msgC         chan struct{}
-	Log          []LogEntry
+	CurrentTerm        int
+	VotedFor           int
+	commitIndex        int
+	LastApplied        int
+	NextIndex          []int
+	MatchIndex         []int
+	CurrentState       int
+	Mtx                sync.Mutex
+	VoteCount          map[int]int
+	ElecTimeOutChannel chan struct{}
+	AppendEChannel     chan struct{}
+	Log                []LogEntry
 }
 
 // GetState ...
@@ -183,9 +183,63 @@ type RequestVoteReply struct {
 	VoteGranted bool
 }
 
-// AppendEntries ...
-func (rf *Raft) AppendEntries(args *RequestVoteArgs, reply *RequestVoteReply) {
+// AppendEntry is ...
+// Arguments:
+// term leader’s term
+// leaderId so follower can redirect clients
+// prevLogIndex index of log entry immediately preceding
+// new ones
+// prevLogTerm term of prevLogIndex entry
+// entries[] log entries to store (empty for heartbeat;
+// may send more than one for efficiency)
+// leaderCommit leader’s commitIndex
+// Results:
+// term currentTerm, for leader to update itself
+// success true if follower contained entry matching
+// prevLogIndex and prevLogTerm
+type AppendEntryArgs struct {
+	Term              int
+	LeaderID          int
+	PrevLogIndex      int
+	PrevLogTerm       int
+	Entries           []LogEntry
+	LeaderCommitIndex int
+}
 
+// AppendEntryReply is ...
+type AppendEntryReply struct {
+	Term    int
+	Success bool
+}
+
+// AppendEntries ...
+func (rf *Raft) AppendEntries(args *AppendEntryArgs, reply *AppendEntryReply) {
+	// Check if this RPC request is just a heartBeat
+	rep := AppendEntryReply{}
+	if len(args.Entries) == 0 {
+		rf.Mtx.Lock()
+		if rf.CurrentTerm <= args.Term {
+			rf.CurrentTerm = args.Term
+			rep.Success = true
+			rep.Term = rf.CurrentTerm
+		} else {
+			rep.Success = false
+			rep.Term = rf.CurrentTerm
+		}
+		rf.CurrentState = STATE_FOLLOWER
+		rf.Mtx.Unlock()
+		rf.ElecTimeOutChannel <- struct{}{} // just to stop the timer of Election
+	} else {
+		// TODO LATER for actual Append Entries RPC from the Leader
+	}
+
+	*reply = rep
+}
+
+func (rf *Raft) sendAppendEntries(server int, args *AppendEntryArgs, reply *AppendEntryReply) bool {
+	//log.Println("got ", server)
+	ok := rf.peers[server].Call("Raft.AppendEntries", args, reply)
+	return ok
 }
 
 // RequestVote ...
@@ -225,9 +279,9 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	}
 	rep.VoteGranted = Voted
 	rep.Term = rf.CurrentTerm
-	if args.Term > rf.CurrentTerm {
-		rf.CurrentTerm = args.Term
-	}
+	// if args.Term > rf.CurrentTerm {
+	// 	rf.CurrentTerm = args.Term
+	// }
 	*reply = rep
 	rf.Mtx.Unlock()
 }
@@ -329,7 +383,34 @@ func max(a, b int) int {
 // Make() must return quickly, so it should start goroutines
 // for any long-running work.
 //
+func sendAppendEntries(rf *Raft, _nServer int, _currentTerm int, _prevLogIndex int,
+	_prevLogTerm int, me int) {
 
+	for serverID := 0; serverID < _nServer; serverID++ {
+		//log.Println("sent ", serverID)
+		var req = AppendEntryArgs{}
+		var rep = AppendEntryReply{}
+		req.Term = _currentTerm
+		req.LeaderID = me
+		req.PrevLogIndex = _prevLogIndex
+		req.PrevLogTerm = _prevLogTerm
+		req.Entries = make([]LogEntry, 0)
+		if serverID != me {
+			go func(_serverID int, _req AppendEntryArgs, _rep AppendEntryReply) {
+				ok := rf.sendAppendEntries(_serverID, &req, &rep)
+				//log.Println("RPC responded!")
+				//log.Println(rep)
+				if !ok {
+					// log.Println("Error in Sending RequestVote RPC!")
+				} else {
+					// TODO do something with the reply
+				}
+			}(serverID, req, rep)
+		}
+	}
+}
+
+// Make() Function is ...
 func Make(peers []*labrpc.ClientEnd, me int,
 	persister *Persister, applyCh chan ApplyMsg) *Raft {
 	rf := &Raft{}
@@ -344,7 +425,8 @@ func Make(peers []*labrpc.ClientEnd, me int,
 
 	// Server when statrs up, starts a follower
 	rf.CurrentState = STATE_FOLLOWER
-	rf.msgC = make(chan struct{})
+	rf.ElecTimeOutChannel = make(chan struct{})
+	rf.AppendEChannel = make(chan struct{})
 	rf.Log = make([]LogEntry, 0)
 	//rf.Log = append(rf.Log, LogEntry{})
 	rf.VotedFor = -1
@@ -360,13 +442,13 @@ func Make(peers []*labrpc.ClientEnd, me int,
 		// are timers events of not
 		// if it gets a timer event:
 		// -> spawns a new go routine R1, let R1 handle all the election related work
-		t1 := time.Now()
+		//t1 := time.Now()
 		for {
 			select {
 			case <-d.Done():
 				// Election Timer expired.
-				t2 := time.Now()
-				fmt.Println(me, " ]> Election Started after timer expired after ", t2.Sub(t1))
+				//t2 := time.Now()
+				//fmt.Println(me, " ]> Election Started after timer expired after ", t2.Sub(t1))
 				d, cancel = context.WithTimeout(context.Background(), time.Millisecond*time.Duration(rand.Intn(MAX_TIMEOUT-MIN_TIMEOUT+1)+MIN_TIMEOUT)) // if/as appropriate
 
 				var electionOK bool
@@ -378,6 +460,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 				var _candidateID = rf.me
 				var _nServer = len(rf.peers)
 				if rf.CurrentState == STATE_FOLLOWER || rf.CurrentState == STATE_CANDIDATE {
+					log.Println("Starting an Election Now by ", rf.me)
 					electionOK = true
 					rf.CurrentTerm++
 					_currentTerm = rf.CurrentTerm
@@ -408,15 +491,15 @@ func Make(peers []*labrpc.ClientEnd, me int,
 							if serverID != _candidateID {
 								// Create a New Go Routine to Send And Block for Receive
 								wg.Add(1)
-								go func(_serverID int) {
+								go func(_serverID int, _req RequestVoteArgs, _rep RequestVoteReply) {
 									defer wg.Done()
-									ok := rf.sendRequestVote(_serverID, &req, &rep)
+									ok := rf.sendRequestVote(_serverID, &_req, &_rep)
 									//log.Println("RPC responded!")
 									//log.Println(rep)
 									if !ok {
 										// log.Println("Error in Sending RequestVote RPC!")
 									} else {
-										if rep.Term > _currentTerm {
+										if _rep.Term > _currentTerm {
 											// rf.Mtx.Lock()
 											// // TODO move to followe state
 											// // stop processing this election votes or
@@ -425,10 +508,10 @@ func Make(peers []*labrpc.ClientEnd, me int,
 											// rf.CurrentState = STATE_FOLLOWER
 											// rf.Mtx.Unlock()
 											localLock.Lock()
-											_receivedTerm = max(_receivedTerm, rep.Term)
+											_receivedTerm = max(_receivedTerm, _rep.Term)
 											localLock.Unlock()
 										} else {
-											if rep.VoteGranted {
+											if _rep.VoteGranted {
 												localLock.Lock()
 												log.Println("[", _candidateID, "]>", " got 1 vote for term ", _currentTerm)
 												VoteCountForThisTerm++
@@ -436,7 +519,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 											}
 										}
 									}
-								}(serverID)
+								}(serverID, req, rep)
 							}
 						}
 						wg.Wait()
@@ -457,6 +540,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 									// that go routine will sleep for some time and wakes up
 									// check this state
 									// if LEADER then sends out HeartBeats
+									rf.AppendEChannel <- struct{}{}
 								}
 							} else {
 								//log.Println("Something might have happened in between!")
@@ -465,12 +549,59 @@ func Make(peers []*labrpc.ClientEnd, me int,
 						rf.Mtx.Unlock()
 					}()
 				}
-			case <-rf.msgC:
+			case <-rf.ElecTimeOutChannel:
 				// got message - cancel existing ElectionTimer and get new one
 				// t2 := time.Now()
+				// log.Println("Something Received .................... Heartbeats .....")
 				cancel()
 				d, cancel = context.WithTimeout(context.Background(), time.Millisecond*time.Duration(rand.Intn(MAX_TIMEOUT-MIN_TIMEOUT+500)+MIN_TIMEOUT))
 				// fmt.Println("Election Timer Reset after ", t2.Sub(t1))
+			}
+		}
+	}()
+
+	// This go routine will do append Entries
+	go func() {
+		// Infinite loop
+		for {
+			d, cancel := context.WithTimeout(context.Background(), time.Millisecond*time.Duration(50))
+			select {
+			case <-d.Done():
+				// Append Entries TimeOut is over
+				var isLeader = false
+				rf.Mtx.Lock()
+				if rf.CurrentState == STATE_LEADER {
+					isLeader = true
+				}
+				rf.Mtx.Unlock()
+				if isLeader {
+					rf.Mtx.Lock()
+					//var _currentState = rf.CurrentState
+					var _currentTerm = rf.CurrentTerm
+					var _nServer = len(rf.peers)
+					var _prevLogIndex = 0 // TODO FIX it later
+					var _prevLogTerm = 0  // TODO FIX it later
+					var me = rf.me
+					rf.Mtx.Unlock()
+					go sendAppendEntries(rf, _nServer, _currentTerm, _prevLogIndex, _prevLogTerm, me)
+				}
+
+			case <-rf.AppendEChannel:
+				cancel()
+				d, cancel = context.WithTimeout(context.Background(), time.Millisecond*time.Duration(50))
+				// This go routine will hanadle sending of Empty AppendEntries Messages
+				// to the peers
+				//_AppendEntries(rf *Raft, _nServer int, _currentTerm int, _prevLogIndex int,_prevLogTerm int, me int)
+				rf.Mtx.Lock()
+				//var _currentState = rf.CurrentState
+				var _currentTerm = rf.CurrentTerm
+				var _nServer = len(rf.peers)
+				var _prevLogIndex = 0 // TODO FIX it later
+				var _prevLogTerm = 0  // TODO FIX it later
+				var me = rf.me
+				rf.Mtx.Unlock()
+
+				go sendAppendEntries(rf, _nServer, _currentTerm, _prevLogIndex, _prevLogTerm, me)
 			}
 		}
 	}()

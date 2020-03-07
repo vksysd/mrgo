@@ -328,7 +328,7 @@ func (cfg *config) checkOneLeader() int {
 		}
 
 		if len(leaders) != 0 {
-			log.Println("looks fine")
+			//log.Println("looks fine")
 			return leaders[lastTermWithLeader][0]
 		}
 	}
