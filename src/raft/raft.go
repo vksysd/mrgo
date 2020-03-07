@@ -21,6 +21,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"math/rand"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -36,7 +37,7 @@ const (
 	// STATE_LEADER .. Follwer state of raft server
 	STATE_LEADER = 2
 
-	MAX_TIMEOUT = 300
+	MAX_TIMEOUT = 500
 	MIN_TIMEOUT = 150
 )
 
@@ -60,9 +61,15 @@ type ApplyMsg struct {
 	CommandIndex int
 }
 
-// Raft ...
+// LogEntry  ...
 // A Go object implementing a single Raft peer.
 //
+type LogEntry struct {
+	Term    int
+	Command interface{}
+}
+
+// Raft ...
 type Raft struct {
 	mu        sync.Mutex          // Lock to protect shared access to this peer's state
 	peers     []*labrpc.ClientEnd // RPC end points of all peers
@@ -85,6 +92,7 @@ type Raft struct {
 	Mtx          sync.Mutex
 	VoteCount    map[int]int
 	msgC         chan struct{}
+	Log          []LogEntry
 }
 
 // GetState ...
@@ -185,6 +193,43 @@ func (rf *Raft) AppendEntries(args *RequestVoteArgs, reply *RequestVoteReply) {
 //
 func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	// Your code here (2A, 2B).
+	// 	Receiver implementation:
+	// 1. Reply false if term < currentTerm (§5.1)
+	// 2. If votedFor is null or candidateId, and candidate’s log is at
+	// least as up-to-date as receiver’s log, grant vote (§5.2, §5.4)
+	rep := RequestVoteReply{}
+	rf.Mtx.Lock()
+	var Voted bool
+	if args.Term < rf.CurrentTerm {
+		rep.VoteGranted = false
+		rep.Term = rf.CurrentTerm
+	} else {
+		if rf.CurrentState == STATE_FOLLOWER {
+			if rf.VotedFor == -1 || rf.VotedFor == args.CandidateID {
+				if len(rf.Log) == 0 {
+					log.Println(rf.me, " voting for", args.CandidateID)
+					Voted = true
+					rf.VotedFor = args.CandidateID
+				} else {
+					if rf.Log[len(rf.Log)-1].Term <= args.LastLogTerm {
+						Voted = true
+					} else if rf.Log[len(rf.Log)-1].Term == args.LastLogTerm {
+						if len(rf.Log) <= args.LastLogIndex {
+							Voted = true
+						}
+					}
+				}
+
+			}
+		}
+	}
+	rep.VoteGranted = Voted
+	rep.Term = rf.CurrentTerm
+	if args.Term > rf.CurrentTerm {
+		rf.CurrentTerm = args.Term
+	}
+	*reply = rep
+	rf.Mtx.Unlock()
 }
 
 //
@@ -217,6 +262,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 // the struct itself.
 //
 func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *RequestVoteReply) bool {
+	//log.Println("got ", server)
 	ok := rf.peers[server].Call("Raft.RequestVote", args, reply)
 	return ok
 }
@@ -265,6 +311,13 @@ func (rf *Raft) killed() bool {
 	return z == 1
 }
 
+func max(a, b int) int {
+	if a < b {
+		return b
+	}
+	return a
+}
+
 //
 // the service or tester wants to create a Raft server. the ports
 // of all the Raft servers (including this one) are in peers[]. this
@@ -276,6 +329,7 @@ func (rf *Raft) killed() bool {
 // Make() must return quickly, so it should start goroutines
 // for any long-running work.
 //
+
 func Make(peers []*labrpc.ClientEnd, me int,
 	persister *Persister, applyCh chan ApplyMsg) *Raft {
 	rf := &Raft{}
@@ -291,93 +345,132 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	// Server when statrs up, starts a follower
 	rf.CurrentState = STATE_FOLLOWER
 	rf.msgC = make(chan struct{})
+	rf.Log = make([]LogEntry, 0)
+	//rf.Log = append(rf.Log, LogEntry{})
+	rf.VotedFor = -1
+	rand.Seed(time.Now().UTC().UnixNano())
 
 	go func() {
 		// kick off leader election periodically by sending out RequestVote RPCs
 		// when it hasn't heard from another peer for a while
 
-		d, cancel := context.WithTimeout(context.Background(), time.Second*time.Duration(3))
+		d, cancel := context.WithTimeout(context.Background(), time.Millisecond*time.Duration(rand.Intn(MAX_TIMEOUT-MIN_TIMEOUT+1)+MIN_TIMEOUT))
+		// This is a timer checking go routine
+		// this routine executes in a infinite for loop and checks if there
+		// are timers events of not
+		// if it gets a timer event:
+		// -> spawns a new go routine R1, let R1 handle all the election related work
+		t1 := time.Now()
 		for {
-			t1 := time.Now()
 			select {
 			case <-d.Done():
 				// Election Timer expired.
 				t2 := time.Now()
-				fmt.Println("Election Started after timer expired after ", t2.Sub(t1))
-				d, cancel = context.WithTimeout(context.Background(), time.Millisecond*time.Duration(3)) // if/as appropriate
+				fmt.Println(me, " ]> Election Started after timer expired after ", t2.Sub(t1))
+				d, cancel = context.WithTimeout(context.Background(), time.Millisecond*time.Duration(rand.Intn(MAX_TIMEOUT-MIN_TIMEOUT+1)+MIN_TIMEOUT)) // if/as appropriate
+
+				var electionOK bool
 
 				rf.Mtx.Lock()
-
+				//var _currentState = rf.CurrentState
+				var _currentTerm = rf.CurrentTerm
+				var _receivedTerm = _currentTerm // _receivedTerm is going to change
+				var _candidateID = rf.me
+				var _nServer = len(rf.peers)
 				if rf.CurrentState == STATE_FOLLOWER || rf.CurrentState == STATE_CANDIDATE {
-					rf.CurrentState = STATE_CANDIDATE
+					electionOK = true
 					rf.CurrentTerm++
-					rf.VotedFor = rf.me
-					//rf.VoteCount++
-					var _currentTerm = rf.CurrentTerm
-					// var _currentState = rf.CurrentState
-					var VoteCountForThisTerm int
-					var VoteCntLock sync.Mutex
-					var wg sync.WaitGroup
-					VoteCntLock.Lock()
-					VoteCountForThisTerm++ // Self Vote
-					VoteCntLock.Unlock()
-					for serverID := range rf.peers {
-						var req = RequestVoteArgs{}
-						var rep = RequestVoteReply{}
-						req.CandidateID = rf.me
-						req.LastLogIndex = 0
-						req.LastLogTerm = 0
-						req.Term = _currentTerm
-						if serverID != me {
-							// Create a New Go Routine to Send And Block for Receive
-							wg.Add(1)
-							go func() {
-								defer wg.Done()
-								ok := rf.sendRequestVote(serverID, &req, &rep)
-								if !ok {
-									log.Println("Error in Sending RequestVote RPC!")
-								} else {
-									if rep.Term > _currentTerm {
-										rf.Mtx.Lock()
-										// TODO move to followe state
-										// stop processing this election votes or
-										// sending requestVote rpc
-										// TODO check
-										rf.CurrentState = STATE_FOLLOWER
-										rf.Mtx.Unlock()
-									} else {
-										if rep.VoteGranted {
-											VoteCntLock.Lock()
-											VoteCountForThisTerm++
-											VoteCntLock.Unlock()
-										}
-									}
-								}
-							}()
-						}
-					}
-					wg.Wait() // wait for all the routines to reply
-					if rf.CurrentState == STATE_CANDIDATE && rf.CurrentTerm == _currentTerm {
-						if VoteCountForThisTerm > (len(rf.peers) / 2) {
-							rf.CurrentState = STATE_LEADER
-							// Send messages to AppendEntried go routine to send
-							// heartbeats to the followers
-							// that go routine will sleep for some time and wakes up
-							// check this state
-							// if LEADER then sends out HeartBeats
-						}
-					} else {
-						log.Println("Something might have happened in between!")
-					}
+					_currentTerm = rf.CurrentTerm
+					rf.CurrentState = STATE_CANDIDATE
+					//_currentState = STATE_CANDIDATE
+					rf.VotedFor = -1 // TODO check
 				}
 				rf.Mtx.Unlock()
 
+				if electionOK {
+					go func() {
+
+						var VoteCountForThisTerm int
+						var localLock sync.Mutex
+						var wg sync.WaitGroup
+
+						localLock.Lock()
+						VoteCountForThisTerm++ // Self Vote
+						localLock.Unlock()
+						for serverID := 0; serverID < _nServer; serverID++ {
+							//log.Println("sent ", serverID)
+							var req = RequestVoteArgs{}
+							var rep = RequestVoteReply{}
+							req.CandidateID = _candidateID
+							req.LastLogIndex = 0
+							req.LastLogTerm = 0
+							req.Term = _currentTerm
+							if serverID != _candidateID {
+								// Create a New Go Routine to Send And Block for Receive
+								wg.Add(1)
+								go func(_serverID int) {
+									defer wg.Done()
+									ok := rf.sendRequestVote(_serverID, &req, &rep)
+									//log.Println("RPC responded!")
+									//log.Println(rep)
+									if !ok {
+										// log.Println("Error in Sending RequestVote RPC!")
+									} else {
+										if rep.Term > _currentTerm {
+											// rf.Mtx.Lock()
+											// // TODO move to followe state
+											// // stop processing this election votes or
+											// // sending requestVote rpc
+											// // TODO check
+											// rf.CurrentState = STATE_FOLLOWER
+											// rf.Mtx.Unlock()
+											localLock.Lock()
+											_receivedTerm = max(_receivedTerm, rep.Term)
+											localLock.Unlock()
+										} else {
+											if rep.VoteGranted {
+												localLock.Lock()
+												log.Println("[", _candidateID, "]>", " got 1 vote for term ", _currentTerm)
+												VoteCountForThisTerm++
+												localLock.Unlock()
+											}
+										}
+									}
+								}(serverID)
+							}
+						}
+						wg.Wait()
+
+						rf.Mtx.Lock()
+						log.Println("[", rf.me, "]> my current term", rf.CurrentTerm)
+						if _receivedTerm > _currentTerm {
+							rf.CurrentState = STATE_FOLLOWER
+							rf.CurrentTerm = _receivedTerm
+						} else {
+							if rf.CurrentState == STATE_CANDIDATE && rf.CurrentTerm == _currentTerm {
+								log.Println("[", rf.me, "]>", "VoteCountForThisTerm (", rf.CurrentTerm, ") = ", VoteCountForThisTerm)
+								if VoteCountForThisTerm > (len(rf.peers) / 2) {
+									rf.CurrentState = STATE_LEADER
+									log.Println(me, " : I am a leader now !!!!!!!!!!!!!!!!!!!!!!!!")
+									// Send messages to AppendEntried go routine to send
+									// heartbeats to the followers
+									// that go routine will sleep for some time and wakes up
+									// check this state
+									// if LEADER then sends out HeartBeats
+								}
+							} else {
+								//log.Println("Something might have happened in between!")
+							}
+						}
+						rf.Mtx.Unlock()
+					}()
+				}
 			case <-rf.msgC:
 				// got message - cancel existing ElectionTimer and get new one
-				t2 := time.Now()
+				// t2 := time.Now()
 				cancel()
-				d, cancel = context.WithTimeout(context.Background(), time.Second*time.Duration(3))
-				fmt.Println("Election Timer Reset after ", t2.Sub(t1))
+				d, cancel = context.WithTimeout(context.Background(), time.Millisecond*time.Duration(rand.Intn(MAX_TIMEOUT-MIN_TIMEOUT+500)+MIN_TIMEOUT))
+				// fmt.Println("Election Timer Reset after ", t2.Sub(t1))
 			}
 		}
 	}()

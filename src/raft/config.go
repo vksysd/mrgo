@@ -328,6 +328,7 @@ func (cfg *config) checkOneLeader() int {
 		}
 
 		if len(leaders) != 0 {
+			log.Println("looks fine")
 			return leaders[lastTermWithLeader][0]
 		}
 	}
@@ -344,6 +345,8 @@ func (cfg *config) checkTerms() int {
 			if term == -1 {
 				term = xterm
 			} else if term != xterm {
+
+				log.Println(term, xterm)
 				cfg.t.Fatalf("servers disagree on term")
 			}
 		}
