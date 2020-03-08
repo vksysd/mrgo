@@ -553,7 +553,8 @@ func Make(peers []*labrpc.ClientEnd, me int,
 											if _rep.VoteGranted {
 												localLock.Lock()
 												//log.Println("[", __candidateID, "]>", " got 1 vote in term ", __currentTerm)
-												VoteCountForThisTerm++
+												VoteCountForThisTerm++ // TODO FIX, redundant for now
+												// as well as data race
 												localLock.Unlock()
 												__voteChan <- struct{}{}
 											}
