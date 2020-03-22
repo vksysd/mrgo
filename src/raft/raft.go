@@ -293,7 +293,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 						Voted = true
 						rf.VotedFor = args.CandidateID
 					} else {
-						if rf.Log[len(rf.Log)-1].Term <= args.LastLogTerm {
+						if rf.Log[len(rf.Log)-1].Term < args.LastLogTerm {
 							Voted = true
 						} else if rf.Log[len(rf.Log)-1].Term == args.LastLogTerm {
 							if len(rf.Log) <= args.LastLogIndex {
@@ -506,19 +506,14 @@ func Make(peers []*labrpc.ClientEnd, me int,
 				if electionOK {
 					go func(__currentTerm int, __receivedTerm int, __candidateID int, __nServer int) {
 
-						var VoteCountForThisTerm int
 						var localLock sync.Mutex
 						//var wg sync.WaitGroup
-
-						localLock.Lock()
-						VoteCountForThisTerm++ // Self Vote
-						localLock.Unlock()
 
 						// create a channel for RPC routines to send
 						// instant messages to the election go routine
 						// rpc routines sends messages as soon as a new +1 vote
 						// arrives
-						var VoteChannel = make(chan struct{})
+						var VoteChannel = make(chan bool)
 						for serverID := 0; serverID < __nServer; serverID++ {
 							//log.Println("sent ", serverID)
 							var req = RequestVoteArgs{}
@@ -530,7 +525,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 							if serverID != __candidateID {
 								// Create a New Go Routine to Send And Block for Receive
 								//wg.Add(1)
-								go func(_serverID int, _req RequestVoteArgs, _rep RequestVoteReply, __voteChan chan struct{}) {
+								go func(_serverID int, _req RequestVoteArgs, _rep RequestVoteReply, __voteChan chan bool) {
 									//defer wg.Done()
 									ok := rf.sendRequestVote(_serverID, &_req, &_rep)
 									//log.Println("RPC responded!")
@@ -549,44 +544,39 @@ func Make(peers []*labrpc.ClientEnd, me int,
 											localLock.Lock()
 											__receivedTerm = max(__receivedTerm, _rep.Term)
 											localLock.Unlock()
-										} else {
-											if _rep.VoteGranted {
-												localLock.Lock()
-												//log.Println("[", __candidateID, "]>", " got 1 vote in term ", __currentTerm)
-												VoteCountForThisTerm++ // TODO FIX, redundant for now
-												// as well as data race
-												localLock.Unlock()
-												__voteChan <- struct{}{}
-											}
 										}
+										__voteChan <- _rep.VoteGranted
 									}
 								}(serverID, req, rep, VoteChannel)
 							}
 						}
 
 						//wg.Wait()
-						var VoteCnt = 0
+						var VoteCnt = 1 // my vote
+						var TotalCnt = 0
 						var canStopWait = false
 						for !canStopWait {
 							select {
-							case <-VoteChannel:
-								VoteCnt++
-								if VoteCnt >= _nServer/2 {
+							case vote := <-VoteChannel:
+								TotalCnt++
+								if vote {
+									VoteCnt++
+								}
+								if VoteCnt > _nServer/2 || TotalCnt == __nServer-1 {
 									canStopWait = true
 								}
 							}
 						}
 
-						// log.Println(__candidateID, "> Waiting done for Term ", __currentTerm, " election to over")
 						rf.Mtx.Lock()
 						// log.Println("[", rf.me, "]> my current term", rf.CurrentTerm)
 						if __receivedTerm > __currentTerm {
 							rf.CurrentState = STATE_FOLLOWER
-							rf.CurrentTerm = __receivedTerm
+							rf.CurrentTerm = __receivedTerm // this is important
 						} else {
 							if rf.CurrentState == STATE_CANDIDATE && rf.CurrentTerm == __currentTerm {
-								//log.Println("[", rf.me, "]>", "VoteCountForThisTerm (", rf.CurrentTerm, ") = ", VoteCountForThisTerm)
-								if VoteCountForThisTerm > (len(rf.peers) / 2) {
+								// log.Println("[", rf.me, "]>", "VoteCountForThisTerm (", rf.CurrentTerm, ") = ", VoteCountForThisTerm)
+								if VoteCnt > (len(rf.peers) / 2) {
 									rf.CurrentState = STATE_LEADER
 									log.Println("[", rf.me, "] : is the Leader now for Term", rf.CurrentTerm)
 									// Send messages to AppendEntried go routine to send
