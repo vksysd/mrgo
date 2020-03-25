@@ -14,3 +14,4 @@ src/main/mrmaster
 src/main/mrsequential
 src/main/mrworker
 *.code-workspace
+*.sum
