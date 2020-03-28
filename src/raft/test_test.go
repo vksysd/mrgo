@@ -108,6 +108,8 @@ func TestBasicAgree2B(t *testing.T) {
 		nd, _ := cfg.nCommitted(index)
 		if nd > 0 {
 			t.Fatalf("some have committed before Start()")
+		} else {
+			log.Warn("It is ok !")
 		}
 
 		xindex := cfg.one(index*100, servers, false)

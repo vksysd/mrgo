@@ -18,7 +18,6 @@ package raft
 //
 
 import (
-	"context"
 	"math/rand"
 	"sync"
 	"sync/atomic"
@@ -37,7 +36,7 @@ const (
 	STATE_LEADER = 2
 
 	MAX_TIMEOUT = 500
-	MIN_TIMEOUT = 150
+	MIN_TIMEOUT = 200
 )
 
 // import "bytes"
@@ -71,7 +70,7 @@ type LogEntry struct {
 
 // Raft ...
 type Raft struct {
-	mu        sync.Mutex          // Lock to protect shared access to this peer's state
+	// mu        sync.Mutex          // Lock to protect shared access to this peer's state
 	peers     []*labrpc.ClientEnd // RPC end points of all peers
 	persister *Persister          // Object to hold this peer's persisted state
 	me        int                 // this peer's index into peers[]
@@ -82,20 +81,21 @@ type Raft struct {
 	// state a Raft server must maintain.
 
 	// These are the states added from the Fig2 of raft paper
-	CurrentTerm        int
-	VotedFor           int
-	commitIndex        int
-	LastApplied        int
-	NextIndex          []int
-	MatchIndex         []int
-	CurrentState       int
-	Mtx                sync.Mutex
-	VoteCount          map[int]int
-	ElecTimeOutChannel chan struct{}
-	AppendEChannel     chan struct{}
-	Log                []LogEntry
-	nServer            int
-	applyCh            chan ApplyMsg
+	CurrentTerm      int
+	VotedFor         int
+	commitIndex      int
+	LastApplied      int
+	NextIndex        []int
+	MatchIndex       []int
+	CurrentState     int
+	Mtx              sync.Mutex
+	VoteCount        map[int]int
+	Log              []LogEntry
+	nServer          int
+	applyCh          chan ApplyMsg
+	GrantVoteChannel chan bool
+	WinElectChannel  chan bool
+	HeartbeatChannel chan bool
 }
 
 // GetState ...
@@ -269,21 +269,28 @@ func (rf *Raft) AppendEntries(args *AppendEntryArgs, reply *AppendEntryReply) {
 		rf.VotedFor = -1
 	}
 
-	// confirm heartbeat to refresh timeout
-	rf.ElecTimeOutChannel <- struct{}{} // can it be a different channel ?
+	// confirm heartbeat to restart timer
+	rf.HeartbeatChannel <- true
 
 	reply.Term = rf.CurrentTerm
 
+	// if my log is very small than the leader's
 	if args.PrevLogIndex > rf.getLastLogIndex() {
 		reply.NextTryIndex = rf.getLastLogIndex() + 1
 		return
 	}
 
-	baseIndex := rf.Log[0].Index // it is zero
+	baseIndex := rf.Log[0].Index
 	// this if means Entries is non zero and we have to check conditions
+	// check prevIndex entry: try to match the term with args.PrevLogTerm
 	if args.PrevLogIndex >= baseIndex && args.PrevLogTerm != rf.Log[args.PrevLogIndex-baseIndex].Term {
+		log.WithFields(log.Fields{
+			"server ": rf.me,
+			"term ":   rf.CurrentTerm,
+		}).Warn("==Mismatch of logs")
 		// if entry log[prevLogIndex] conflicts with new one, there may be conflict entries before.
 		// bypass all entries during the problematic term to speed up.
+		// Here we are skipping one bad term...
 		term := rf.Log[args.PrevLogIndex-baseIndex].Term
 		for i := args.PrevLogIndex - 1; i >= baseIndex; i-- {
 			if rf.Log[i-baseIndex].Term != term {
@@ -291,18 +298,13 @@ func (rf *Raft) AppendEntries(args *AppendEntryArgs, reply *AppendEntryReply) {
 				break
 			}
 		}
-	} else if args.PrevLogIndex >= baseIndex-1 { // check why there is a minus -1
-		// otherwise log up to prevLogIndex are safe.
-		// merge lcoal log and entries from leader, and apply log if commitIndex changes.
+	} else if args.PrevLogIndex >= baseIndex {
+		// time to correct or copy new entries
+		// first copy completely uptp prevIndex + 1 is for inclusing prevIndex
 		rf.Log = rf.Log[:args.PrevLogIndex-baseIndex+1]
+		// beyond prevIndex overwrite new entries
 		rf.Log = append(rf.Log, args.Entries...)
-		// if len(rf.Log) == 1 {
-		// 	if rf.Log[0].Index == 0 && rf.Log[0].Term == 0 {
-		// 		log.WithFields(log.Fields{
-		// 			"server ": rf.me,
-		// 		}).Trace("HeartBeat Received!")
-		// 	}
-		// }
+
 		reply.Success = true
 		reply.NextTryIndex = args.PrevLogIndex + len(args.Entries) // not used
 
@@ -347,18 +349,25 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	}
 	reply.Term = rf.CurrentTerm
 	reply.VoteGranted = false
+	// rf.VotedFor == args.CandidateID this case is added to consider the drop
+	// of messages when this server has already voted for args.CandidateID
 	if (rf.VotedFor == -1 || rf.VotedFor == args.CandidateID) && rf.isUpToDate(args.LastLogTerm, args.LastLogIndex) {
 		// vote for the candidate
 		rf.VotedFor = args.CandidateID
 		reply.VoteGranted = true
 		log.WithFields(log.Fields{
-			"Server ": rf.me,
-		}).Debug("voted for ", "[", args.CandidateID, "]")
-		rf.ElecTimeOutChannel <- struct{}{} // can it be a different channel
+			"by server ": rf.me,
+			"@ term":     rf.CurrentTerm,
+		}).Debug("voted for server ", "[", args.CandidateID, "]")
+		rf.GrantVoteChannel <- true
 	} else {
+		// this else section is just for logging purpose
 		k := rf.isUpToDate(args.LastLogTerm, args.LastLogIndex)
 		if !k {
-			log.Error("Log is not up to date")
+			log.WithFields(log.Fields{
+				"by server ": rf.me,
+				"@ term ":    rf.CurrentTerm,
+			}).Error("Log is not up to date with candidate ", "[", args.CandidateID, "]")
 		}
 	}
 }
@@ -435,7 +444,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 		_commitIndex = rf.getLastLogIndex() + 1
 		rf.Log = append(rf.Log, LogEntry{Index: _commitIndex, Term: _term, Command: command})
 	}
-	rf.AppendEChannel <- struct{}{}
+	// rf.HeartbeatChannel <- true
 	return _commitIndex, _term, isLeader
 }
 
@@ -487,6 +496,9 @@ func min(a, b int) int {
 func (rf *Raft) _sendAppendEntries() {
 	rf.Mtx.Lock()
 	defer rf.Mtx.Unlock()
+	// this function will return immediately
+	// it starts one go routine for each follower to send new entries
+	// and those go routine waits for answer
 	for serverID := 0; serverID < rf.nServer; serverID++ {
 		if serverID != rf.me && rf.CurrentState == STATE_LEADER {
 			req := AppendEntryArgs{}
@@ -517,7 +529,8 @@ func (rf *Raft) _sendAppendEntries() {
 				if rep.Term > rf.CurrentTerm {
 					// become follower and update current term
 					log.WithFields(log.Fields{
-						"server": rf.me,
+						"by server": rf.me,
+						"@ term":    rf.CurrentTerm,
 					}).Warn("Stepping Down to Follower!")
 					rf.CurrentTerm = rep.Term
 					rf.CurrentState = STATE_FOLLOWER
@@ -527,14 +540,14 @@ func (rf *Raft) _sendAppendEntries() {
 
 				if rep.Success {
 					if len(req.Entries) > 0 {
-						rf.NextIndex[serverID] = req.Entries[len(req.Entries)-1].Index + 1
-						rf.MatchIndex[serverID] = rf.NextIndex[serverID] - 1
+						rf.NextIndex[_serverID] = req.Entries[len(req.Entries)-1].Index + 1
+						rf.MatchIndex[_serverID] = rf.NextIndex[_serverID] - 1
 					}
 				} else {
 					// the follower could have very long log..because of past leader
 					// so the follower has to try couple of times with nexttryIndex
 					// therefore we (the leader) has to take the minimum only
-					rf.NextIndex[serverID] = min(rep.NextTryIndex, rf.getLastLogIndex())
+					rf.NextIndex[_serverID] = min(rep.NextTryIndex, rf.getLastLogIndex())
 					// TODO
 					// rf.AppendEChannel <- struct{}{} // send to all of the followers again
 				}
@@ -559,11 +572,141 @@ func (rf *Raft) _sendAppendEntries() {
 	}
 }
 
+func (rf *Raft) Run() {
+	for {
+		rf.Mtx.Lock()
+		_state := rf.CurrentState
+		rf.Mtx.Unlock()
+		switch _state {
+		case STATE_FOLLOWER:
+			select {
+			case <-rf.GrantVoteChannel:
+			case <-rf.HeartbeatChannel:
+			case <-time.After(time.Millisecond * time.Duration(rand.Intn(MAX_TIMEOUT-MIN_TIMEOUT+1)+MIN_TIMEOUT)):
+				rf.Mtx.Lock()
+				rf.CurrentState = STATE_CANDIDATE
+				rf.Mtx.Unlock()
+			}
+		case STATE_LEADER:
+			go rf._sendAppendEntries()
+			time.Sleep(time.Millisecond * 60)
+		case STATE_CANDIDATE:
+			rf.Mtx.Lock()
+			rf.CurrentTerm++
+			rf.VotedFor = rf.me
+			var _currentTerm = rf.CurrentTerm
+			var _receivedTerm = _currentTerm // _receivedTerm is going to change
+			var _candidateID = rf.me
+			var _nServer = len(rf.peers)
+			var _LastLogIndex = rf.getLastLogIndex()
+			var _LastLogTerm = rf.getLastLogTerm()
+			rf.Mtx.Unlock()
+			log.WithFields(log.Fields{
+				"by server ": _candidateID,
+				"@ term ":    _currentTerm,
+			}).Info("Election started!")
+			// this go routine will broadcast request vote to all the servers
+			go func(__currentTerm int, __receivedTerm int, __candidateID int, __nServer int,
+				__lastLogIndex int, __lastLogTerm int) {
+
+				var localLock sync.Mutex
+
+				var VoteChannel = make(chan bool)
+				for serverID := 0; serverID < __nServer; serverID++ {
+					req := RequestVoteArgs{}
+					rep := RequestVoteReply{}
+					req.CandidateID = __candidateID
+					req.LastLogIndex = __lastLogIndex
+					req.LastLogTerm = __lastLogTerm
+					req.Term = __currentTerm
+					if serverID != __candidateID {
+						go func(_serverID int, _req RequestVoteArgs, _rep RequestVoteReply, __voteChan chan bool) {
+							ok := rf.sendRequestVote(_serverID, &_req, &_rep)
+							if ok {
+								if _rep.Term > __currentTerm {
+
+									localLock.Lock()
+									__receivedTerm = max(__receivedTerm, _rep.Term)
+									localLock.Unlock()
+								}
+								__voteChan <- _rep.VoteGranted
+							} else {
+								// log.Error("RPC failed!")
+							}
+						}(serverID, req, rep, VoteChannel)
+					}
+				}
+
+				var VoteCnt = 1 // my vote
+				var TotalCnt = 0
+				var canStopWait = false
+				for !canStopWait {
+					select {
+					case vote := <-VoteChannel:
+						TotalCnt++
+						if vote {
+							VoteCnt++
+						}
+						if VoteCnt > _nServer/2 || TotalCnt == __nServer-1 {
+							canStopWait = true
+						}
+					}
+				}
+
+				rf.Mtx.Lock()
+				if __receivedTerm > _currentTerm {
+					log.WithFields(log.Fields{
+						"by server ":  rf.me,
+						"@ old term ": _currentTerm,
+					}).Warn("Higher Term received in the election")
+					rf.CurrentState = STATE_FOLLOWER
+					rf.CurrentTerm = __receivedTerm // this is important
+					rf.VotedFor = -1
+				} else {
+					if rf.CurrentState == STATE_CANDIDATE && rf.CurrentTerm == _currentTerm {
+						if VoteCnt > (len(rf.peers) / 2) {
+							rf.CurrentState = STATE_LEADER
+							log.WithFields(log.Fields{
+								" server ": _candidateID,
+								"@ term ":  _currentTerm,
+							}).Info("Leader Elected is ")
+
+							rf.NextIndex = make([]int, len(rf.peers))
+							rf.MatchIndex = make([]int, len(rf.peers))
+							nextIndex := rf.getLastLogIndex() + 1
+							for i := range rf.NextIndex {
+								rf.NextIndex[i] = nextIndex
+							}
+
+							rf.WinElectChannel <- true
+						}
+					} else {
+						log.Println(__candidateID, "> Something might have happened in between!")
+					}
+				}
+				rf.Mtx.Unlock()
+			}(_currentTerm, _receivedTerm, _candidateID, _nServer, _LastLogIndex, _LastLogTerm)
+
+			select {
+			case <-rf.HeartbeatChannel:
+				rf.Mtx.Lock()
+				rf.CurrentState = STATE_FOLLOWER
+				rf.Mtx.Unlock()
+			case <-rf.WinElectChannel:
+			case <-time.After(time.Millisecond * time.Duration(rand.Intn(MAX_TIMEOUT-MIN_TIMEOUT+1)+MIN_TIMEOUT)):
+			}
+		}
+	}
+}
+
 // Make Function is ...
 func Make(peers []*labrpc.ClientEnd, me int,
 	persister *Persister, applyCh chan ApplyMsg) *Raft {
 	rf := &Raft{}
 	rf.applyCh = applyCh
+	rf.GrantVoteChannel = make(chan bool, 1000)
+	rf.WinElectChannel = make(chan bool, 1000)
+	rf.HeartbeatChannel = make(chan bool, 1000)
 	rf.peers = peers
 	rf.persister = persister
 	rf.me = me
@@ -576,11 +719,8 @@ func Make(peers []*labrpc.ClientEnd, me int,
 
 	// Server when statrs up, starts a follower
 	rf.CurrentState = STATE_FOLLOWER
-	rf.ElecTimeOutChannel = make(chan struct{})
-	rf.AppendEChannel = make(chan struct{})
 	rf.Log = make([]LogEntry, 0)
 	rf.Log = append(rf.Log, LogEntry{Term: 0, Index: 0})
-	//rf.Log = append(rf.Log, LogEntry{})
 	rf.VotedFor = -1
 	rand.Seed(time.Now().UTC().UnixNano())
 
@@ -597,161 +737,8 @@ func Make(peers []*labrpc.ClientEnd, me int,
 		DisableLevelTruncation: false,
 	})
 	log.SetLevel(log.TraceLevel)
-	go func() {
-		// kick off leader election periodically by sending out RequestVote RPCs
-		// when it hasn't heard from another peer for a while
 
-		d, cancel := context.WithTimeout(context.Background(), time.Millisecond*time.Duration(rand.Intn(MAX_TIMEOUT-MIN_TIMEOUT+1)+MIN_TIMEOUT))
-		// This is a timer checking go routine
-		// this routine executes in a infinite for loop and checks if there
-		// are timers events of not
-		// if it gets a timer event:
-		// -> spawns a new go routine R1, let R1 handle all the election related work
-		t1 := time.Now()
-		for {
-			select {
-			case <-d.Done():
-				// Election Timer expired.
-				t2 := time.Now()
-				//fmt.Println(me, " ]> Election Started after timer expired after ", t2.Sub(t1))
-				d, cancel = context.WithTimeout(context.Background(), time.Millisecond*time.Duration(rand.Intn(MAX_TIMEOUT-MIN_TIMEOUT+1)+MIN_TIMEOUT)) // if/as appropriate
-
-				var electionOK bool
-
-				rf.Mtx.Lock()
-				//var _currentState = rf.CurrentState
-				var _currentTerm = rf.CurrentTerm
-				var _receivedTerm = _currentTerm // _receivedTerm is going to change
-				var _candidateID = rf.me
-				var _nServer = len(rf.peers)
-				var _LastLogIndex = rf.getLastLogIndex()
-				var _LastLogTerm = rf.getLastLogTerm()
-				if rf.CurrentState == STATE_FOLLOWER || rf.CurrentState == STATE_CANDIDATE {
-
-					electionOK = true
-					rf.CurrentTerm++
-					_currentTerm = rf.CurrentTerm
-					rf.CurrentState = STATE_CANDIDATE
-					//_currentState = STATE_CANDIDATE
-					rf.VotedFor = -1 // TODO check
-					log.Println("[", rf.me, "] is starting an Election for Term ", _currentTerm, " at time = ", t2.Sub(t1))
-				}
-				rf.Mtx.Unlock()
-
-				if electionOK {
-					// this go routine will broadcast request vote to all the servers
-					go func(__currentTerm int, __receivedTerm int, __candidateID int, __nServer int,
-						__lastLogIndex int, __lastLogTerm int) {
-
-						var localLock sync.Mutex
-
-						var VoteChannel = make(chan bool)
-						for serverID := 0; serverID < __nServer; serverID++ {
-							var req = RequestVoteArgs{}
-							var rep = RequestVoteReply{}
-							req.CandidateID = __candidateID
-							req.LastLogIndex = __lastLogIndex
-							req.LastLogTerm = __lastLogTerm
-							req.Term = __currentTerm
-							if serverID != __candidateID {
-								go func(_serverID int, _req RequestVoteArgs, _rep RequestVoteReply, __voteChan chan bool) {
-									ok := rf.sendRequestVote(_serverID, &_req, &_rep)
-
-									if !ok {
-										// log.Println("Error in Sending RequestVote RPC!")
-									} else {
-										if _rep.Term > __currentTerm {
-
-											localLock.Lock()
-											__receivedTerm = max(__receivedTerm, _rep.Term)
-											localLock.Unlock()
-										}
-										__voteChan <- _rep.VoteGranted
-									}
-								}(serverID, req, rep, VoteChannel)
-							}
-						}
-
-						//wg.Wait()
-						var VoteCnt = 1 // my vote
-						var TotalCnt = 0
-						var canStopWait = false
-						for !canStopWait {
-							select {
-							case vote := <-VoteChannel:
-								TotalCnt++
-								if vote {
-									VoteCnt++
-								}
-								if VoteCnt > _nServer/2 || TotalCnt == __nServer-1 {
-									canStopWait = true
-								}
-							}
-						}
-
-						rf.Mtx.Lock()
-						if __receivedTerm > _currentTerm {
-							rf.CurrentState = STATE_FOLLOWER
-							rf.CurrentTerm = __receivedTerm // this is important
-							rf.VotedFor = -1
-						} else {
-							if rf.CurrentState == STATE_CANDIDATE && rf.CurrentTerm == _currentTerm {
-								if VoteCnt > (len(rf.peers) / 2) {
-									rf.CurrentState = STATE_LEADER
-									log.Println("[", rf.me, "] : is the Leader now for Term", rf.CurrentTerm)
-
-									rf.NextIndex = make([]int, len(rf.peers))
-									rf.MatchIndex = make([]int, len(rf.peers))
-									nextIndex := rf.getLastLogIndex() + 1
-									for i := range rf.NextIndex {
-										rf.NextIndex[i] = nextIndex
-									}
-
-									rf.AppendEChannel <- struct{}{}
-								}
-							} else {
-								log.Println(__candidateID, "> Something might have happened in between!")
-							}
-						}
-						rf.Mtx.Unlock()
-					}(_currentTerm, _receivedTerm, _candidateID, _nServer, _LastLogIndex, _LastLogTerm)
-				}
-			case <-rf.ElecTimeOutChannel:
-				// got message - cancel existing ElectionTimer and get new one
-				// t2 := time.Now()
-				// log.Println("Something Received .................... Heartbeats .....")
-				cancel()
-				d, cancel = context.WithTimeout(context.Background(), time.Millisecond*time.Duration(rand.Intn(MAX_TIMEOUT-MIN_TIMEOUT+1)+MIN_TIMEOUT))
-				// fmt.Println("Election Timer Reset after ", t2.Sub(t1))
-			}
-		}
-	}()
-
-	// This go routine will do append Entries on a regular basis
-	go func() {
-		// Infinite loop
-		for {
-			d, cancel := context.WithTimeout(context.Background(), time.Millisecond*time.Duration(50))
-			select {
-			case <-d.Done():
-				// Append Entries TimeOut is over
-				var isLeader = false
-				rf.Mtx.Lock()
-				if rf.CurrentState == STATE_LEADER {
-					isLeader = true
-				}
-				rf.Mtx.Unlock()
-				if isLeader {
-					go rf._sendAppendEntries() // broadcast
-				}
-
-			case <-rf.AppendEChannel: // this is immediate action of a leader
-				cancel()
-				d, cancel = context.WithTimeout(context.Background(), time.Millisecond*time.Duration(50))
-				go rf._sendAppendEntries() // broadcast
-			}
-		}
-	}()
+	go rf.Run()
 
 	return rf
 }
