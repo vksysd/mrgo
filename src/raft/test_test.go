@@ -8,12 +8,16 @@ package raft
 // test with the original before submitting.
 //
 
-import "testing"
-import "fmt"
-import "time"
-import "math/rand"
-import "sync/atomic"
-import "sync"
+import (
+	"fmt"
+	"math/rand"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	log "github.com/sirupsen/logrus"
+)
 
 // The tester generously allows solutions to complete elections in one second
 // (much more than the paper's range of timeouts).
@@ -32,6 +36,7 @@ func TestInitialElection2A(t *testing.T) {
 	// sleep a bit to avoid racing with followers learning of the
 	// election, then check that all peers agree on the term.
 	time.Sleep(50 * time.Millisecond)
+	//log.Println("-------------------------")
 	term1 := cfg.checkTerms()
 	if term1 < 1 {
 		t.Fatalf("term is %v, but should be at least 1", term1)
@@ -58,31 +63,36 @@ func TestReElection2A(t *testing.T) {
 	cfg.begin("Test (2A): election after network failure")
 
 	leader1 := cfg.checkOneLeader()
-
+	log.Println("One Leader Found : [", leader1, "]")
 	// if the leader disconnects, a new one should be elected.
+	log.Println("[", leader1, "] will be patitioned now!")
 	cfg.disconnect(leader1)
-	cfg.checkOneLeader()
-
+	_leaderTemp := cfg.checkOneLeader()
+	log.Println("After [", leader1, "] partition, new Leader is [", _leaderTemp, "]")
 	// if the old leader rejoins, that shouldn't
 	// disturb the new leader.
+	log.Println("[", leader1, "] is back Online !")
 	cfg.connect(leader1)
 	leader2 := cfg.checkOneLeader()
+	log.Println("After [", leader1, "] resume, new Leader is [", leader2, "]")
 
+	log.Println("[", leader2, "] and [", (leader2+1)%servers, "] both will be partitioned now!")
 	// if there's no quorum, no leader should
 	// be elected.
 	cfg.disconnect(leader2)
 	cfg.disconnect((leader2 + 1) % servers)
 	time.Sleep(2 * RaftElectionTimeout)
+
 	cfg.checkNoLeader()
-
 	// if a quorum arises, it should elect a leader.
+	log.Println("[", (leader2+1)%servers, "] is back online")
 	cfg.connect((leader2 + 1) % servers)
-	cfg.checkOneLeader()
-
+	_leaderTemp1 := cfg.checkOneLeader()
+	log.Println("After [", (leader2+1)%servers, "] resume, new Leader is [", _leaderTemp1, "]")
 	// re-join of last node shouldn't prevent leader from existing.
 	cfg.connect(leader2)
-	cfg.checkOneLeader()
-
+	_leaderTemp2 := cfg.checkOneLeader()
+	log.Println("After [", leader2, "] resume, new Leader is [", _leaderTemp2, "]")
 	cfg.end()
 }
 
@@ -98,6 +108,8 @@ func TestBasicAgree2B(t *testing.T) {
 		nd, _ := cfg.nCommitted(index)
 		if nd > 0 {
 			t.Fatalf("some have committed before Start()")
+		} else {
+			log.Warn("It is ok !")
 		}
 
 		xindex := cfg.one(index*100, servers, false)
