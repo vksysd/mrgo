@@ -18,11 +18,13 @@ package raft
 //
 
 import (
+	"bytes"
 	"math/rand"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"github.com/ddeka0/mrgo/src/labgob"
 	labrpc "github.com/ddeka0/mrgo/src/labrpc"
 	log "github.com/sirupsen/logrus"
 )
@@ -127,28 +129,33 @@ func (rf *Raft) persist() {
 	// e.Encode(rf.yyy)
 	// data := w.Bytes()
 	// rf.persister.SaveRaftState(data)
+	data := rf.getRaftState()
+	rf.persister.SaveRaftState(data)
 }
 
-//
-// restore previously persisted state.
-//
 func (rf *Raft) readPersist(data []byte) {
 	if data == nil || len(data) < 1 { // bootstrap without any state?
 		return
 	}
 	// Your code here (2C).
 	// Example:
-	// r := bytes.NewBuffer(data)
-	// d := labgob.NewDecoder(r)
-	// var xxx
-	// var yyy
-	// if d.Decode(&xxx) != nil ||
-	//    d.Decode(&yyy) != nil {
-	//   error...
-	// } else {
-	//   rf.xxx = xxx
-	//   rf.yyy = yyy
-	// }
+	r := bytes.NewBuffer(data)
+	d := labgob.NewDecoder(r)
+	d.Decode(&rf.CurrentTerm)
+	d.Decode(&rf.VotedFor)
+	d.Decode(&rf.Log)
+}
+
+//
+// encode current raft state.
+//
+func (rf *Raft) getRaftState() []byte {
+	w := new(bytes.Buffer)
+	e := labgob.NewEncoder(w)
+	e.Encode(rf.CurrentTerm)
+	e.Encode(rf.VotedFor)
+	e.Encode(rf.Log)
+	return w.Bytes()
 }
 
 // RequestVoteArgs ...
@@ -252,6 +259,7 @@ func (rf *Raft) applyLog() {
 func (rf *Raft) AppendEntries(args *AppendEntryArgs, reply *AppendEntryReply) {
 	rf.Mtx.Lock()
 	defer rf.Mtx.Unlock()
+	defer rf.persist()
 
 	reply.Success = false
 
@@ -333,6 +341,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	// least as up-to-date as receiver’s log, grant vote (§5.2, §5.4)
 	rf.Mtx.Lock()
 	defer rf.Mtx.Unlock()
+	defer rf.persist()
 
 	if args.Term < rf.CurrentTerm {
 		// reject request with stale term number
@@ -367,7 +376,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 			log.WithFields(log.Fields{
 				"by server ": rf.me,
 				"@ term ":    rf.CurrentTerm,
-			}).Error("Log is not up to date with candidate ", "[", args.CandidateID, "]")
+			}).Error("Candidate", "[", args.CandidateID, "]", " log is not up to date")
 		}
 	}
 }
@@ -443,6 +452,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 		_term = rf.CurrentTerm
 		_commitIndex = rf.getLastLogIndex() + 1
 		rf.Log = append(rf.Log, LogEntry{Index: _commitIndex, Term: _term, Command: command})
+		rf.persist()
 	}
 	// rf.HeartbeatChannel <- true
 	return _commitIndex, _term, isLeader
@@ -535,6 +545,7 @@ func (rf *Raft) _sendAppendEntries() {
 					rf.CurrentTerm = rep.Term
 					rf.CurrentState = STATE_FOLLOWER
 					rf.VotedFor = -1
+					rf.persist()
 					return
 				}
 
@@ -586,6 +597,7 @@ func (rf *Raft) Run() {
 				rf.Mtx.Lock()
 				rf.CurrentState = STATE_CANDIDATE
 				rf.Mtx.Unlock()
+				rf.persist()
 			}
 		case STATE_LEADER:
 			go rf._sendAppendEntries()
@@ -601,6 +613,9 @@ func (rf *Raft) Run() {
 			var _LastLogIndex = rf.getLastLogIndex()
 			var _LastLogTerm = rf.getLastLogTerm()
 			rf.Mtx.Unlock()
+
+			rf.persist()
+
 			log.WithFields(log.Fields{
 				"by server ": _candidateID,
 				"@ term ":    _currentTerm,
@@ -662,6 +677,7 @@ func (rf *Raft) Run() {
 					rf.CurrentState = STATE_FOLLOWER
 					rf.CurrentTerm = __receivedTerm // this is important
 					rf.VotedFor = -1
+					rf.persist()
 				} else {
 					if rf.CurrentState == STATE_CANDIDATE && rf.CurrentTerm == _currentTerm {
 						if VoteCnt > (len(rf.peers) / 2) {
@@ -714,9 +730,6 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.nServer = len(peers)
 	// Your initialization code here (2A, 2B, 2C).
 
-	// initialize from state persisted before a crash
-	rf.readPersist(persister.ReadRaftState())
-
 	// Server when statrs up, starts a follower
 	rf.CurrentState = STATE_FOLLOWER
 	rf.Log = make([]LogEntry, 0)
@@ -737,6 +750,10 @@ func Make(peers []*labrpc.ClientEnd, me int,
 		DisableLevelTruncation: false,
 	})
 	log.SetLevel(log.TraceLevel)
+
+	// initialize from state persisted before a crash
+	rf.readPersist(persister.ReadRaftState())
+	rf.persist()
 
 	go rf.Run()
 
