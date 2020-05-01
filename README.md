@@ -25,14 +25,15 @@ Following is the project directory structure:
 #### Using Map Reduce Application:
 
 Testing word count application
-    [new terminal]
     
+    [new terminal]
     1. cd main
     2. go build -buildmode=plugin ../mrapps/wc.go && go run mrmaster.go pg-*.txt
     
     [another terminal]
     1. cd main
     2. go run mrworker.go wc.so
+    
 Testing all the application inside /mrapps/
     
     1. sh ./test-mr.sh
