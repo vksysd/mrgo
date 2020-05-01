@@ -218,6 +218,7 @@ func (m *Master) RequestTask(req MrRequest, reply *MrReply) error {
 					// start a go routing to handle timeout
 					go func(n int, flName string) {
 						<-ctx.Done()
+
 						m.c.L.Lock()
 
 						if m.ReducerFileState[flName] != REDUCER_DONE {
@@ -229,6 +230,7 @@ func (m *Master) RequestTask(req MrRequest, reply *MrReply) error {
 							fmt.Println("Timeout Reducer Worker ", n, " filename ", flName)
 						}
 						m.c.L.Unlock()
+
 						m.c.Signal()
 					}(task.WorkerNum, task.FileName)
 					fmt.Println("file ", flname, " is given to worker no ", task.WorkerNum)
@@ -257,6 +259,7 @@ func (m *Master) RequestTask(req MrRequest, reply *MrReply) error {
 				fmt.Println("Sleep in the wait of map task")
 				m.c.Wait() // sleep
 				fmt.Println("Woke up after sleep for map work")
+				continue
 			}
 		}
 
@@ -291,7 +294,6 @@ func (m *Master) MapperDone(req *MapperRequest, reply *MrEmpty) error {
 		fmt.Println("Intermediate files from worker = ", req.WorkerNum, " has been rejected for original file", req.OriginalFileAllocated)
 	}
 	m.c.L.Unlock()
-
 	m.c.Signal() // to wake up any worker RPC handler thread
 
 	return nil
@@ -372,6 +374,7 @@ func (m *Master) Done() bool {
 		}
 	}
 	m.c.L.Unlock()
+
 	return ret
 }
 
