@@ -518,7 +518,15 @@ func (rf *Raft) _sendAppendEntries() {
 			req.LeaderID = rf.me
 			req.PrevLogIndex = rf.NextIndex[serverID] - 1
 			if req.PrevLogIndex >= baseIndex {
-				req.PrevLogTerm = rf.Log[req.PrevLogIndex-baseIndex].Term
+				if len(rf.Log) > (req.PrevLogIndex - baseIndex) {
+					req.PrevLogTerm = rf.Log[req.PrevLogIndex-baseIndex].Term
+				} else {
+					log.WithFields(log.Fields{
+						"PreviousLogIndex ": req.PrevLogIndex,
+						"baseindex ":        baseIndex,
+					}).Error("Index out of bound error !! Returning from _sendAppendEntries")
+					return
+				}
 			}
 
 			if rf.NextIndex[serverID] <= rf.getLastLogIndex() {
