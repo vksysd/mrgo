@@ -26,6 +26,7 @@ Following is the project directory structure:
 
 Testing word count application
     [new terminal]
+    
     1. cd main
     2. go build -buildmode=plugin ../mrapps/wc.go && go run mrmaster.go pg-*.txt
     
@@ -33,6 +34,7 @@ Testing word count application
     1. cd main
     2. go run mrworker.go wc.so
 Testing all the application inside /mrapps/
+    
     1. sh ./test-mr.sh
 
 #### Using the Raft application:
