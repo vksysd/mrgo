@@ -9,11 +9,12 @@ package main
 import (
 	crand "crypto/rand"
 	"math/big"
-	"mr"
 	"os"
 	"sort"
 	"strconv"
 	"strings"
+
+	mr "github.com/ddeka0/distributed-system/src/mr"
 )
 
 func maybeCrash() {

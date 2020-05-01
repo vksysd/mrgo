@@ -7,10 +7,11 @@ package main
 //
 
 import (
-	"mr"
 	"strconv"
 	"strings"
 	"unicode"
+
+	mr "github.com/ddeka0/distributed-system/src/mr"
 )
 
 //

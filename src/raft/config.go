@@ -8,17 +8,21 @@ package raft
 // test with the original before submitting.
 //
 
-import "../labrpc"
-import "log"
-import "sync"
-import "testing"
-import "runtime"
-import "math/rand"
-import crand "crypto/rand"
-import "math/big"
-import "encoding/base64"
-import "time"
-import "fmt"
+import (
+	"log"
+	"math/rand"
+	"runtime"
+	"sync"
+	"testing"
+
+	crand "crypto/rand"
+	"encoding/base64"
+	"fmt"
+	"math/big"
+	"time"
+
+	labrpc "github.com/ddeka0/distributed-system/src/labrpc"
+)
 
 func randstring(n int) string {
 	b := make([]byte, 2*n)
@@ -324,6 +328,7 @@ func (cfg *config) checkOneLeader() int {
 		}
 
 		if len(leaders) != 0 {
+			//log.Println("looks fine")
 			return leaders[lastTermWithLeader][0]
 		}
 	}
@@ -340,6 +345,8 @@ func (cfg *config) checkTerms() int {
 			if term == -1 {
 				term = xterm
 			} else if term != xterm {
+
+				log.Println(term, xterm)
 				cfg.t.Fatalf("servers disagree on term")
 			}
 		}

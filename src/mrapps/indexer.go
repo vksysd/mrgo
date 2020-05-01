@@ -8,10 +8,11 @@ package main
 
 import (
 	"fmt"
-	"mr"
 	"sort"
 	"strings"
 	"unicode"
+
+	mr "github.com/ddeka0/distributed-system/src/mr"
 )
 
 // The mapping function is called once for each piece of the input.

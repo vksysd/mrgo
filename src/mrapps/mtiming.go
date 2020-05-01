@@ -10,12 +10,13 @@ package main
 import (
 	"fmt"
 	"io/ioutil"
-	"mr"
 	"os"
 	"sort"
 	"strings"
 	"syscall"
 	"time"
+
+	mr "github.com/ddeka0/distributed-system/src/mr"
 )
 
 func nparallel(phase string) int {

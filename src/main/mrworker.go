@@ -13,9 +13,10 @@ package main
 import (
 	"fmt"
 	"log"
-	"mr"
 	"os"
 	"plugin"
+
+	mr "github.com/ddeka0/distributed-system/src/mr"
 )
 
 func main() {
