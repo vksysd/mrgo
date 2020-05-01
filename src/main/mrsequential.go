@@ -14,7 +14,7 @@ import (
 	"plugin"
 	"sort"
 
-	mr "github.com/ddeka0/mrgo/src/mr"
+	mr "github.com/ddeka0/distributed-system/src/mr"
 )
 
 // for sorting by key.

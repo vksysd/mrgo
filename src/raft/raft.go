@@ -24,8 +24,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/ddeka0/mrgo/src/labgob"
-	labrpc "github.com/ddeka0/mrgo/src/labrpc"
+	"github.com/ddeka0/distributed-system/src/labgob"
+	labrpc "github.com/ddeka0/distributed-system/src/labrpc"
 	log "github.com/sirupsen/logrus"
 )
 

@@ -59,7 +59,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	labgob "github.com/ddeka0/mrgo/src/labgob"
+	labgob "github.com/ddeka0/distributed-system/src/labgob"
 )
 
 type reqMsg struct {

@@ -17,7 +17,7 @@ import (
 	"strings"
 	"time"
 
-	mr "github.com/ddeka0/mrgo/src/mr"
+	mr "github.com/ddeka0/distributed-system/src/mr"
 )
 
 func maybeCrash() {

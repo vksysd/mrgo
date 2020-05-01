@@ -21,7 +21,7 @@ import (
 	"math/big"
 	"time"
 
-	labrpc "github.com/ddeka0/mrgo/src/labrpc"
+	labrpc "github.com/ddeka0/distributed-system/src/labrpc"
 )
 
 func randstring(n int) string {

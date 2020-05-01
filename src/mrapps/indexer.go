@@ -12,7 +12,7 @@ import (
 	"strings"
 	"unicode"
 
-	mr "github.com/ddeka0/mrgo/src/mr"
+	mr "github.com/ddeka0/distributed-system/src/mr"
 )
 
 // The mapping function is called once for each piece of the input.
