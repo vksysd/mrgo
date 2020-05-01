@@ -4,7 +4,7 @@ This is a cloned repository from MIT's distributed system course
 # Project Structure:
 This project uses Go Programming Language
 Following is the project directory structure:
-
+```
 ├── go.mod
 ├── LICENSE
 ├── Makefile
@@ -21,3 +21,4 @@ Following is the project directory structure:
     ├── raft
     ├── shardkv
     └── shardmaster
+```
