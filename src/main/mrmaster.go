@@ -9,13 +9,10 @@ package main
 // Please do not change this file.
 //
 
-import (
-	"fmt"
-	"os"
-	"time"
-
-	mr "github.com/ddeka0/mrgo/src/mr"
-)
+import "../mr"
+import "time"
+import "os"
+import "fmt"
 
 func main() {
 	if len(os.Args) < 2 {
@@ -24,7 +21,9 @@ func main() {
 	}
 
 	m := mr.MakeMaster(os.Args[1:], 10)
-	for m.Done_() == false {
+	for m.Done() == false {
 		time.Sleep(time.Second)
 	}
+
+	time.Sleep(time.Second)
 }

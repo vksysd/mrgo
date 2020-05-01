@@ -10,14 +10,11 @@ package main
 // Please do not change this file.
 //
 
-import (
-	"fmt"
-	"log"
-	"os"
-	"plugin"
-
-	mr "github.com/ddeka0/mrgo/src/mr"
-)
+import "../mr"
+import "plugin"
+import "os"
+import "fmt"
+import "log"
 
 func main() {
 	if len(os.Args) != 2 {
