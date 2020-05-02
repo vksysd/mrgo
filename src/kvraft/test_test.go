@@ -12,8 +12,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ddeka0/distributed-system/src/models"
-	"github.com/ddeka0/distributed-system/src/porcupine"
+	models "github.com/ddeka0/distributed-system/src/models"
+	porcupine "github.com/ddeka0/distributed-system/src/porcupine"
 )
 
 // The tester generously allows solutions to complete elections in one second
