@@ -218,6 +218,8 @@ func GenericTest(t *testing.T, part string, nclients int, unreliable bool, crash
 					v := Get(cfg, myck, key)
 					if v != last {
 						log.Fatalf("get wrong value, key %v, wanted:\n%v\n, got\n%v\n", key, last, v)
+					} else {
+						log.Println("Correct Get Value")
 					}
 				}
 			}
