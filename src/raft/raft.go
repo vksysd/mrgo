@@ -449,6 +449,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 		isLeader = true
 	}
 	if isLeader {
+		// log.Println("OK fine now I can handle requets>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>")
 		_term = rf.CurrentTerm
 		_commitIndex = rf.getLastLogIndex() + 1
 		rf.Log = append(rf.Log, LogEntry{Index: _commitIndex, Term: _term, Command: command})

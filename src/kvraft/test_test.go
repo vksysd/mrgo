@@ -12,8 +12,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ddeka0/distributed-system/src/models"
-	"github.com/ddeka0/distributed-system/src/porcupine"
+	models "github.com/ddeka0/distributed-system/src/models"
+	porcupine "github.com/ddeka0/distributed-system/src/porcupine"
 )
 
 // The tester generously allows solutions to complete elections in one second
@@ -218,6 +218,8 @@ func GenericTest(t *testing.T, part string, nclients int, unreliable bool, crash
 					v := Get(cfg, myck, key)
 					if v != last {
 						log.Fatalf("get wrong value, key %v, wanted:\n%v\n, got\n%v\n", key, last, v)
+					} else {
+						log.Println("Correct Get Value")
 					}
 				}
 			}
